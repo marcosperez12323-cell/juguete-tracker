@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Juego navideño con control de cabeza</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; width: 100%; min-height: 100%; background: #f5efe3; font-family: Arial, sans-serif; }
+    body { display: flex; justify-content: center; }
+    #app { width: min(100%, 1100px); padding: 12px; }
+    .topbar { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+    .status { background:white; border:2px solid #ddd; border-radius:14px; padding:8px 12px; }
+    .status strong { display:block; font-size:20px; }
+    .game-wrap { position:relative; overflow:hidden; border-radius:18px; border:2px solid #d8d0c5; background:#fffdf4; }
+    canvas { width:100%; height:auto; display:block; touch-action:none; }
+    video {
+      position:absolute; right:10px; bottom:10px; width:150px; max-width:28%;
+      border:3px solid white; border-radius:14px; transform:scaleX(-1);
+      background:#222; box-shadow:0 2px 8px rgba(0,0,0,.2);
+    }
+    .controls { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:10px; }
+    button {
+      border:0; border-radius:14px; padding:13px 10px; font-size:16px; font-weight:700;
+      color:white; background:#d9485f; cursor:pointer;
+    }
+    button.secondary { background:#3f8f5f; }
+    button.dark { background:#4f5964; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .help { background:white; border:2px solid #ddd; border-radius:14px; padding:12px; margin-top:10px; line-height:1.45; }
+    .meter { height:12px; background:#eee; border-radius:20px; overflow:hidden; margin-top:7px; }
+    #headMeter { height:100%; width:50%; background:#3f8f5f; transition:width .05s linear; }
+    #cameraMessage {
+      position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+      padding:20px; text-align:center; background:rgba(255,253,244,.9); z-index:3;
+    }
+    #cameraMessage > div { max-width:520px; background:white; padding:20px; border-radius:18px; border:2px solid #ddd; }
+    @media (orientation: portrait) {
+      #rotate { display:flex; }
+    }
+    #rotate {
+      display:none; position:fixed; inset:0; z-index:20; background:#fffaf0;
+      align-items:center; justify-content:center; text-align:center; padding:30px;
+    }
+    @media (max-width:650px) {
+      #app { padding:6px; }
+      .topbar { font-size:13px; }
+      .status strong { font-size:16px; }
+      button { font-size:14px; padding:11px 6px; }
+      .help { font-size:13px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="rotate">
+    <div>
+      <h2>Gira el celular</h2>
+      <p>Este juego funciona mejor en posición horizontal.</p>
+    </div>
+  </div>
+
+  <main id="app">
+    <div class="topbar">
+      <div class="status">Puntaje<strong id="score">0</strong></div>
+      <div class="status">Control<strong id="trackingStatus">Sin cámara</strong></div>
+      <div class="status">Estado<strong id="gameStatus">Listo</strong></div>
+    </div>
+
+    <div class="game-wrap">
+      <canvas id="game" width="960" height="540"></canvas>
+      <video id="camera" autoplay playsinline muted></video>
+
+      <div id="cameraMessage">
+        <div>
+          <h2>Control con la cabeza</h2>
+          <p>Presiona <strong>Activar cámara</strong> y permite el acceso. Luego mueve la cabeza suavemente a izquierda y derecha.</p>
+          <button id="startCamera">Activar cámara</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="left">← Izquierda</button>
+      <button id="restart" class="secondary">Reiniciar</button>
+      <button id="right">Derecha →</button>
+    </div>
+
+    <div class="controls">
+      <button id="centerHead" class="dark">Centrar cabeza</button>
+      <button id="pauseTracking" class="dark">Pausar cámara</button>
+      <button id="startGame" class="secondary">Empezar juego</button>
+    </div>
+
+    <section class="help">
+      <strong>Cómo funciona:</strong> la línea verde representa la posición horizontal de tu rostro.
+      Colócate frente a la cámara, pulsa <strong>Centrar cabeza</strong> y después mueve la cabeza.
+      <div class="meter"><div id="headMeter"></div></div>
+      <p id="errorText"></p>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      FaceLandmarker,
+      FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const video = document.getElementById("camera");
+
+    const scoreEl = document.getElementById("score");
+    const trackingStatusEl = document.getElementById("trackingStatus");
+    const gameStatusEl = document.getElementById("gameStatus");
+    const cameraMessage = document.getElementById("cameraMessage");
+    const errorText = document.getElementById("errorText");
+    const headMeter = document.getElementById("headMeter");
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    let faceLandmarker = null;
+    let stream = null;
+    let tracking = false;
+    let lastVideoTime = -1;
+    let calibratedCenter = 0.5;
+    let smoothFaceX = 0.5;
+    let lastFaceX = 0.5;
+
+    const state = {
+      running: false,
+      gameOver: false,
+      score: 0,
+      speed: 4.1,
+      spawnTimer: 0,
+      spawnEvery: 82,
+      left: false,
+      right: false,
+      player: { x: W / 2, y: H - 92, speed: 7 },
+      obstacles: [],
+      snow: Array.from({length: 65}, () => ({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 1 + Math.random() * 2,
+        s: .4 + Math.random()
+      }))
+    };
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function resetGame() {
+      state.running = false;
+      state.gameOver = false;
+      state.score = 0;
+      state.speed = 4.1;
+      state.spawnTimer = 0;
+      state.spawnEvery = 82;
+      state.player.x = W / 2;
+      state.obstacles = [];
+      scoreEl.textContent = "0";
+      gameStatusEl.textContent = "Listo";
+    }
+
+    function startGame() {
+      if (state.gameOver) resetGame();
+      state.running = true;
+      state.gameOver = false;
+      gameStatusEl.textContent = "Jugando";
+    }
+
+    function createObstacle() {
+      const lanes = [W * .38, W * .50, W * .62];
+      state.obstacles.push({
+        x: lanes[Math.floor(Math.random() * lanes.length)],
+        y: -70
+      });
+    }
+
+    function drawPaper() {
+      ctx.fillStyle = "#fffdf2";
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = "rgba(92,151,210,.17)";
+      ctx.lineWidth = 2;
+      for (let y = 30; y < H; y += 30) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(220,80,100,.20)";
+      ctx.beginPath();
+      ctx.moveTo(55, 0);
+      ctx.lineTo(55, H);
+      ctx.stroke();
+    }
+
+    function drawTree(x, y, s) {
+      ctx.fillStyle = "#8b5a2b";
+      ctx.fillRect(x - 6*s, y, 12*s, 25*s);
+      ctx.fillStyle = "#3da55b";
+      for (const [dy, w, h] of [[-68,36,55],[-48,31,48],[-28,26,42]]) {
+        ctx.beginPath();
+        ctx.moveTo(x, y + dy*s);
+        ctx.lineTo(x - w*s, y + (dy+h)*s);
+        ctx.lineTo(x + w*s, y + (dy+h)*s);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = "#ffd43b";
+      ctx.beginPath();
+      ctx.arc(x, y-72*s, 5*s, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    function drawBackground() {
+      drawPaper();
+      ctx.fillStyle = "#dff3ff";
+      ctx.fillRect(0, H*.57, W, H*.43);
+
+      drawTree(95, H-90, 1.15);
+      drawTree(175, H-70, .85);
+      drawTree(W-95, H-90, 1.15);
+      drawTree(W-175, H-70, .85);
+
+      for (const flake of state.snow) {
+        ctx.fillStyle = "#abd9f5";
+        ctx.beginPath();
+        ctx.arc(flake.x, flake.y, flake.r, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    function drawRoad() {
+      ctx.fillStyle = "#696d75";
+      ctx.beginPath();
+      ctx.moveTo(W*.42, 0);
+      ctx.lineTo(W*.58, 0);
+      ctx.lineTo(W*.76, H);
+      ctx.lineTo(W*.24, H);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "#ffe070";
+      ctx.lineWidth = 7;
+      ctx.setLineDash([35, 28]);
+      ctx.lineDashOffset = -(performance.now()/12);
+      ctx.beginPath();
+      ctx.moveTo(W/2, 0);
+      ctx.lineTo(W/2, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function drawPlayer() {
+      const p = state.player;
+      ctx.fillStyle = "#d9485f";
+      ctx.fillRect(p.x-21, p.y-10, 42, 48);
+
+      ctx.fillStyle = "#ffd6b5";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y-30, 17, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "#c62828";
+      ctx.beginPath();
+      ctx.moveTo(p.x-20, p.y-43);
+      ctx.lineTo(p.x+18, p.y-43);
+      ctx.lineTo(p.x+8, p.y-65);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(p.x+9, p.y-65, 6, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "#333";
+      ctx.beginPath();
+      ctx.arc(p.x-6, p.y-33, 2, 0, Math.PI*2);
+      ctx.arc(p.x+6, p.y-33, 2, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    function drawSnowman(ob) {
+      const x = ob.x;
+      const y = ob.y;
+
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#b8c1c7";
+      ctx.lineWidth = 3;
+
+      ctx.beginPath();
+      ctx.arc(x, y+18, 28, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x, y-17, 20, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+
+      ctx.fillStyle = "#222";
+      for (const [dx,dy,r] of [[-7,-22,3],[7,-22,3],[0,5,3],[0,18,3],[0,31,3]]) {
+        ctx.beginPath(); ctx.arc(x+dx,y+dy,r,0,Math.PI*2); ctx.fill();
+      }
+
+      ctx.fillStyle = "#f28c28";
+      ctx.beginPath();
+      ctx.moveTo(x,y-14); ctx.lineTo(x+15,y-10); ctx.lineTo(x,y-7);
+      ctx.closePath(); ctx.fill();
+
+      ctx.fillStyle = "#222";
+      ctx.fillRect(x-21,y-44,42,7);
+      ctx.fillRect(x-13,y-63,26,22);
+    }
+
+    function updateGame() {
+      if (!state.running || state.gameOver) return;
+
+      if (state.left) state.player.x -= state.player.speed;
+      if (state.right) state.player.x += state.player.speed;
+
+      state.player.x = clamp(state.player.x, W*.28, W*.72);
+
+      state.spawnTimer++;
+      if (state.spawnTimer >= state.spawnEvery) {
+        createObstacle();
+        state.spawnTimer = 0;
+      }
+
+      for (const ob of state.obstacles) ob.y += state.speed;
+
+      for (let i = state.obstacles.length-1; i >= 0; i--) {
+        const ob = state.obstacles[i];
+
+        if (ob.y > H+80) {
+          state.obstacles.splice(i,1);
+          state.score++;
+          scoreEl.textContent = String(state.score);
+          if (state.score % 5 === 0) {
+            state.speed += .35;
+            state.spawnEvery = Math.max(44, state.spawnEvery-3);
+          }
+          continue;
+        }
+
+        const hit =
+          state.player.x-22 < ob.x+30 &&
+          state.player.x+22 > ob.x-30 &&
+          state.player.y-50 < ob.y+48 &&
+          state.player.y+55 > ob.y-62;
+
+        if (hit) {
+          state.gameOver = true;
+          state.running = false;
+          gameStatusEl.textContent = "¡Choque!";
+        }
+      }
+
+      for (const flake of state.snow) {
+        flake.y += flake.s;
+        if (flake.y > H) {
+          flake.y = -5;
+          flake.x = Math.random()*W;
+        }
+      }
+    }
+
+    function drawGameOver() {
+      if (!state.gameOver) return;
+      ctx.fillStyle = "rgba(255,253,242,.83)";
+      ctx.fillRect(0,0,W,H);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#d9485f";
+      ctx.font = "bold 54px Arial";
+      ctx.fillText("¡CHOQUE!", W/2, H/2-8);
+      ctx.fillStyle = "#333";
+      ctx.font = "25px Arial";
+      ctx.fillText("Pulsa Reiniciar", W/2, H/2+38);
+    }
+
+    function updateHeadControl() {
+      if (!tracking || !faceLandmarker || video.readyState < 2) return;
+      if (video.currentTime === lastVideoTime) return;
+
+      lastVideoTime = video.currentTime;
+      const result = faceLandmarker.detectForVideo(video, performance.now());
+
+      if (!result.faceLandmarks || result.faceLandmarks.length === 0) {
+        trackingStatusEl.textContent = "No veo rostro";
+        return;
+      }
+
+      trackingStatusEl.textContent = "Cabeza detectada";
+
+      // Punto 1: zona central de la nariz.
+      const nose = result.faceLandmarks[0][1];
+      lastFaceX = nose.x;
+
+      // La vista de la cámara está espejada, así que invertimos X.
+      const mirroredX = 1 - nose.x;
+
+      // Suavizado para evitar temblores.
+      smoothFaceX += (mirroredX - smoothFaceX) * 0.18;
+
+      // Movimiento relativo a la posición usada al calibrar.
+      const offset = smoothFaceX - calibratedCenter;
+      const sensitivity = 3.2;
+      const normalized = clamp(0.5 + offset * sensitivity, 0, 1);
+
+      state.player.x = W*.28 + normalized * (W*.44);
+      headMeter.style.width = `${normalized*100}%`;
+    }
+
+    async function startCamera() {
+      errorText.textContent = "";
+      trackingStatusEl.textContent = "Cargando modelo…";
+      document.getElementById("startCamera").disabled = true;
+
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+        );
+
+        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          },
+          audio: false
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        smoothFaceX = 0.5;
+        calibratedCenter = 0.5;
+        tracking = true;
+        trackingStatusEl.textContent = "Busca tu rostro";
+        cameraMessage.style.display = "none";
+
+      } catch (error) {
+        console.error(error);
+        trackingStatusEl.textContent = "Error de cámara";
+        errorText.textContent =
+          "No se pudo activar. Abre la página con HTTPS, permite la cámara y prueba en Safari o Chrome actualizado.";
+        document.getElementById("startCamera").disabled = false;
+      }
+    }
+
+    function centerHead() {
+      // mirrored current position
+      calibratedCenter = 1 - lastFaceX;
+      smoothFaceX = calibratedCenter;
+      trackingStatusEl.textContent = "Cabeza centrada";
+    }
+
+    document.getElementById("startCamera").addEventListener("click", startCamera);
+    document.getElementById("centerHead").addEventListener("click", centerHead);
+    document.getElementById("startGame").addEventListener("click", startGame);
+    document.getElementById("restart").addEventListener("click", resetGame);
+
+    document.getElementById("pauseTracking").addEventListener("click", (e) => {
+      tracking = !tracking;
+      e.currentTarget.textContent = tracking ? "Pausar cámara" : "Continuar cámara";
+      trackingStatusEl.textContent = tracking ? "Activa" : "Pausada";
+    });
+
+    const leftBtn = document.getElementById("left");
+    const rightBtn = document.getElementById("right");
+
+    leftBtn.addEventListener("pointerdown", e => { e.preventDefault(); state.left = true; });
+    rightBtn.addEventListener("pointerdown", e => { e.preventDefault(); state.right = true; });
+
+    ["pointerup","pointerleave","pointercancel"].forEach(name => {
+      leftBtn.addEventListener(name, () => state.left = false);
+      rightBtn.addEventListener(name, () => state.right = false);
+    });
+
+    window.addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft") state.left = true;
+      if (e.key === "ArrowRight") state.right = true;
+    });
+
+    window.addEventListener("keyup", e => {
+      if (e.key === "ArrowLeft") state.left = false;
+      if (e.key === "ArrowRight") state.right = false;
+    });
+
+    function loop() {
+      updateHeadControl();
+      updateGame();
+
+      drawBackground();
+      drawRoad();
+      state.obstacles.forEach(drawSnowman);
+      drawPlayer();
+      drawGameOver();
+
+      requestAnimationFrame(loop);
+    }
+
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
