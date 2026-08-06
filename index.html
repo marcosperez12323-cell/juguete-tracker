@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>Pollito navideño con control de cabeza</title>
+  <title>Pollito navideño rápido con control de cabeza</title>
 
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -58,6 +58,9 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 8px;
       margin-top: 8px;
+    }
+    .controls.single-control {
+      grid-template-columns: 1fr;
     }
     button {
       border: 0;
@@ -159,10 +162,8 @@
     </div>
   </section>
 
-  <section class="controls">
-    <button id="left">← Izquierda</button>
+  <section class="controls single-control">
     <button id="restart" class="green">Reiniciar</button>
-    <button id="right">Derecha →</button>
   </section>
 
   <section class="controls">
@@ -223,11 +224,9 @@
     running: false,
     gameOver: false,
     score: 0,
-    speed: 4,
+    speed: 5.2,
     spawnCounter: 0,
-    spawnEvery: 82,
-    manualLeft: false,
-    manualRight: false,
+    spawnEvery: 78,
     player: { x: W / 2, y: H - 92, speed: 7 },
     obstacles: [],
     snow: Array.from({ length: 65 }, function () {
@@ -248,9 +247,9 @@
     state.running = false;
     state.gameOver = false;
     state.score = 0;
-    state.speed = 4;
+    state.speed = 5.2;
     state.spawnCounter = 0;
-    state.spawnEvery = 82;
+    state.spawnEvery = 78;
     state.player.x = W / 2;
     state.obstacles = [];
     scoreEl.textContent = "0";
@@ -363,15 +362,6 @@
   function drawPlayer() {
     var p = state.player;
 
-    // Sombra sencilla debajo del personaje.
-    ctx.save();
-    ctx.globalAlpha = 0.20;
-    ctx.fillStyle = "#263238";
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y + 56, 34, 9, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
     if (playerSpriteReady) {
       // El punto p.y mantiene el mismo centro que tenía el personaje anterior.
       var spriteWidth = 102;
@@ -444,9 +434,6 @@
   function updateGame() {
     if (!state.running || state.gameOver) return;
 
-    if (state.manualLeft) state.player.x -= state.player.speed;
-    if (state.manualRight) state.player.x += state.player.speed;
-
     state.player.x = clamp(state.player.x, W * 0.28, W * 0.72);
 
     state.spawnCounter++;
@@ -468,7 +455,7 @@
         scoreEl.textContent = String(state.score);
 
         if (state.score % 5 === 0) {
-          state.speed += 0.35;
+          state.speed += 0.45;
           state.spawnEvery = Math.max(44, state.spawnEvery - 3);
         }
         continue;
@@ -662,22 +649,6 @@
       ? "Listo. Mueve la cabeza suavemente hacia los lados."
       : "La cámara aún no tiene detector facial.";
   }
-
-  function bindHoldButton(button, property) {
-    button.addEventListener("pointerdown", function (event) {
-      event.preventDefault();
-      state[property] = true;
-    });
-
-    ["pointerup", "pointercancel", "pointerleave"].forEach(function (name) {
-      button.addEventListener(name, function () {
-        state[property] = false;
-      });
-    });
-  }
-
-  bindHoldButton(document.getElementById("left"), "manualLeft");
-  bindHoldButton(document.getElementById("right"), "manualRight");
 
   document.getElementById("restart").addEventListener("click", resetGame);
   document.getElementById("start").addEventListener("click", startGame);
