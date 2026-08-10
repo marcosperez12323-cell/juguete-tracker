@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>Pollito navideño — control de cabeza</title>
+  <title>Pollito navideño vertical — control de cabeza</title>
 
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -14,7 +14,7 @@
       font-family: Arial, sans-serif;
     }
     body { display: flex; justify-content: center; }
-    #app { width: min(1100px, 100%); padding: 8px; }
+    #app { width: min(480px, 100%); padding: 8px; }
     .hud {
       display: grid;
       grid-template-columns: 1fr;
@@ -43,16 +43,15 @@
       height: auto;
       touch-action: none;
     }
+    /* La cámara sigue funcionando, pero su vista previa queda fuera de pantalla. */
     video {
       position: absolute;
-      right: 8px;
-      bottom: 8px;
-      width: min(170px, 29%);
-      border: 3px solid white;
-      border-radius: 12px;
-      background: #222;
-      transform: scaleX(-1);
-      box-shadow: 0 2px 10px rgba(0,0,0,.22);
+      left: -9999px;
+      top: -9999px;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
     }
     .controls {
       display: grid;
@@ -87,7 +86,7 @@ button:disabled { opacity: .55; }
       background: rgba(255,253,243,.93);
     }
     #cameraPanel > div {
-      max-width: 520px;
+      max-width: 86%;
       padding: 18px;
       background: white;
       border: 2px solid #ddd;
@@ -125,7 +124,7 @@ button:disabled { opacity: .55; }
   </section>
 
   <section class="game-wrap">
-    <canvas id="game" width="960" height="540"></canvas>
+    <canvas id="game" width="540" height="960"></canvas>
     <video id="camera" autoplay playsinline muted></video>
 
     <div id="cameraPanel">
@@ -183,12 +182,12 @@ button:disabled { opacity: .55; }
 
   // Dificultad del juego.
   // Empieza un poco más rápido y aumenta cada 5 puntos, hasta un máximo.
-  var BASE_SPEED = 5.4;
-  var MAX_SPEED = 9.0;
+  var BASE_SPEED = 9.4;
+  var MAX_SPEED = 15.0;
   var BASE_SPAWN_EVERY = 68;
   var MIN_SPAWN_EVERY = 45;
 
-  // Cinco posiciones de paso. Se abren con la perspectiva de la carretera.
+  // Cinco posiciones de paso para el formato vertical. Se abren con la perspectiva de la carretera.
   var laneValues = [-0.90, -0.45, 0, 0.45, 0.90];
 
   var state = {
@@ -203,7 +202,7 @@ button:disabled { opacity: .55; }
     rewardEvery: 340,
     rewardPending: false,
     lastObstacleLane: -1,
-    player: { x: W / 2, y: H - 92, speed: 7 },
+    player: { x: W / 2, y: H - 140, speed: 7 },
     obstacles: [],
     rewards: [],
     rewardPopups: [],
@@ -233,17 +232,18 @@ button:disabled { opacity: .55; }
 
   function roadHalfWidthAt(y) {
     var t = clamp(y / H, 0, 1);
-    return W * (0.08 + 0.18 * t);
+    // En vertical la carretera empieza angosta y se abre mucho más hacia abajo.
+    return W * (0.07 + 0.30 * t);
   }
 
   function xForLane(lane, y) {
-    // Los cinco carriles se abren hacia la parte baja de la pantalla.
-    return W / 2 + lane * roadHalfWidthAt(y) * 0.82;
+    // Los cinco carriles siguen la perspectiva de la carretera vertical.
+    return W / 2 + lane * roadHalfWidthAt(y) * 0.86;
   }
 
   function updateDifficulty() {
     var level = Math.floor(state.score / 5);
-    state.speed = Math.min(MAX_SPEED, BASE_SPEED + level * 0.4);
+    state.speed = Math.min(MAX_SPEED, BASE_SPEED + level * 0.65);
     state.spawnEvery = Math.max(
       MIN_SPAWN_EVERY,
       BASE_SPAWN_EVERY - level * 3
@@ -286,12 +286,30 @@ button:disabled { opacity: .55; }
     gameStatusEl.textContent = "Jugando";
   }
 
-  function pickObstacleLane() {
-    var laneIndex = Math.floor(Math.random() * laneValues.length);
+  function activeRewardLaneIndex() {
+    if (state.rewards.length === 0) return -1;
+    return state.rewards[0].laneIndex;
+  }
 
-    // Evita que el mismo carril salga demasiadas veces seguidas.
-    if (laneValues.length > 1 && laneIndex === state.lastObstacleLane) {
-      laneIndex = (laneIndex + 1 + Math.floor(Math.random() * (laneValues.length - 1))) % laneValues.length;
+  function pickObstacleLane() {
+    var reservedLane = activeRewardLaneIndex();
+    var available = [];
+
+    for (var i = 0; i < laneValues.length; i++) {
+      // Mientras haya una estrella en pantalla, su carril queda libre de muñecos.
+      if (i !== reservedLane) available.push(i);
+    }
+
+    if (available.length === 0) return -1;
+
+    var laneIndex = available[Math.floor(Math.random() * available.length)];
+
+    // Evita que el mismo carril salga demasiadas veces seguidas cuando sea posible.
+    if (available.length > 1 && laneIndex === state.lastObstacleLane) {
+      var alternatives = available.filter(function (index) {
+        return index !== state.lastObstacleLane;
+      });
+      laneIndex = alternatives[Math.floor(Math.random() * alternatives.length)];
     }
 
     state.lastObstacleLane = laneIndex;
@@ -300,29 +318,50 @@ button:disabled { opacity: .55; }
 
   function spawnObstacle() {
     var laneIndex = pickObstacleLane();
+    if (laneIndex < 0) return false;
+
     var laneJitter = (Math.random() - 0.5) * 0.08;
     var lane = clamp(laneValues[laneIndex] + laneJitter, -0.95, 0.95);
     var y = -70;
 
     state.obstacles.push({
+      laneIndex: laneIndex,
       lane: lane,
       x: xForLane(lane, y),
       y: y
     });
+    return true;
   }
 
   function spawnReward() {
-    var laneIndex = Math.floor(Math.random() * laneValues.length);
+    // La estrella puede aparecer entre los muñecos, pero solo en un carril
+    // que actualmente no tenga ningún muñeco. Ese carril queda reservado
+    // hasta que la estrella sea recogida o salga de la pantalla.
+    var occupied = {};
+    for (var i = 0; i < state.obstacles.length; i++) {
+      occupied[state.obstacles[i].laneIndex] = true;
+    }
+
+    var freeLanes = [];
+    for (var laneIndex = 0; laneIndex < laneValues.length; laneIndex++) {
+      if (!occupied[laneIndex]) freeLanes.push(laneIndex);
+    }
+
+    if (freeLanes.length === 0) return false;
+
+    var chosenLaneIndex = freeLanes[Math.floor(Math.random() * freeLanes.length)];
     var laneJitter = (Math.random() - 0.5) * 0.06;
-    var lane = clamp(laneValues[laneIndex] + laneJitter, -0.95, 0.95);
+    var lane = clamp(laneValues[chosenLaneIndex] + laneJitter, -0.95, 0.95);
     var y = -50;
 
     state.rewards.push({
+      laneIndex: chosenLaneIndex,
       lane: lane,
       x: xForLane(lane, y),
       y: y,
       spin: Math.random() * Math.PI * 2
     });
+    return true;
   }
 
   // Fondo estilo crayón inspirado en un dibujo infantil sobre hoja de cuaderno.
@@ -642,12 +681,12 @@ button:disabled { opacity: .55; }
     bg.height = H;
     var g = bg.getContext("2d");
 
-    // Papel cálido.
+    // Papel cálido de cuaderno.
     g.fillStyle = "#fbf6e8";
     g.fillRect(0, 0, W, H);
 
     // Textura leve de papel.
-    for (var t = 0; t < 180; t++) {
+    for (var t = 0; t < 260; t++) {
       var px = seededNoise(300 + t * 5.1) * W;
       var py = seededNoise(700 + t * 7.7) * H;
       var len = 2 + seededNoise(900 + t * 3.3) * 8;
@@ -659,90 +698,96 @@ button:disabled { opacity: .55; }
       g.stroke();
     }
 
-    // Líneas de cuaderno y margen rojo.
-    for (var ly = 28; ly < H; ly += 30) {
+    // Líneas azules y margen rojo de cuaderno.
+    for (var ly = 28; ly < H; ly += 31) {
       roughLine(g, 0, ly, W, ly, "rgba(78,151,211,.28)", 1.5, 1200 + ly, 2);
     }
-    roughLine(g, 60, 0, 60, H, "rgba(217,72,83,.34)", 2.2, 1300, 3);
+    roughLine(g, 43, 0, 43, H, "rgba(217,72,83,.34)", 2.2, 1300, 3);
 
-    // Nieve lateral con rayones azules.
-    g.fillStyle = "rgba(246,252,255,.82)";
-    g.fillRect(0, H * 0.46, W, H * 0.54);
+    // Nieve a los lados.
+    g.fillStyle = "rgba(246,252,255,.80)";
+    g.fillRect(0, H * 0.24, W, H * 0.76);
 
-    for (var s = 0; s < 38; s++) {
+    for (var s = 0; s < 64; s++) {
       var sideLeft = s % 2 === 0;
       var nx = sideLeft
-        ? seededNoise(1400 + s * 4.2) * W * 0.30
-        : W * 0.70 + seededNoise(1600 + s * 4.4) * W * 0.30;
-      var ny = H * 0.50 + seededNoise(1800 + s * 5.6) * H * 0.46;
-      var nlen = 18 + seededNoise(2000 + s * 2.7) * 55;
-      roughLine(g, nx, ny, nx + nlen, ny - 5, "rgba(62,149,214,.33)", 2.4, 2100 + s * 9, 2);
+        ? seededNoise(1400 + s * 4.2) * W * 0.27
+        : W * 0.73 + seededNoise(1600 + s * 4.4) * W * 0.27;
+      var ny = H * 0.27 + seededNoise(1800 + s * 5.6) * H * 0.70;
+      var nlen = 14 + seededNoise(2000 + s * 2.7) * 42;
+      roughLine(g, nx, ny, nx + nlen, ny - 5, "rgba(62,149,214,.31)", 2.2, 2100 + s * 9, 2);
     }
 
-    // Carretera de frente, en perspectiva, con relleno de crayón.
+    // Carretera vertical: angosta en el horizonte y ancha cerca de Pollito.
     var road = [
-      [W * 0.42, 0],
-      [W * 0.58, 0],
-      [W * 0.76, H],
-      [W * 0.24, H]
+      [W * 0.43, 0],
+      [W * 0.57, 0],
+      [W * 0.87, H],
+      [W * 0.13, H]
     ];
     roughPolygon(g, road, "#6e7075", "#555960", 2300, "#4f5257");
 
     g.save();
     polygonPath(g, road);
     g.clip();
-    for (var ry = -10; ry < H + 20; ry += 9) {
+    for (var ry = -10; ry < H + 20; ry += 11) {
       var rj = (seededNoise(2500 + ry) - 0.5) * 10;
       g.strokeStyle = "rgba(45,48,52,.20)";
       g.lineWidth = 3;
       g.beginPath();
-      g.moveTo(W * 0.18, ry + rj);
-      g.lineTo(W * 0.82, ry - 8 + rj);
+      g.moveTo(W * 0.06, ry + rj);
+      g.lineTo(W * 0.94, ry - 8 + rj);
       g.stroke();
     }
     g.restore();
 
-    // Línea amarilla discontinua.
-    var dashYs = [14, 76, 144, 220, 306, 402, 500];
-    var dashHeights = [24, 27, 31, 35, 40, 46, 54];
-
-    for (var d = 0; d < dashYs.length; d++) {
+    // Línea amarilla central con segmentos cada vez más grandes hacia abajo.
+    var dashY = 22;
+    var dashIndex = 0;
+    while (dashY < H) {
+      var dt = dashY / H;
+      var dashLen = 18 + 52 * dt;
       roughLine(
         g,
         W / 2,
-        dashYs[d],
-        W / 2 + (seededNoise(2800 + d) - 0.5) * 3,
-        dashYs[d] + dashHeights[d],
+        dashY,
+        W / 2 + (seededNoise(2800 + dashIndex) - 0.5) * 3,
+        Math.min(H, dashY + dashLen),
         "#f2c83e",
-        7 + d * 0.35,
-        2850 + d * 13,
+        5 + dt * 5,
+        2850 + dashIndex * 13,
         3
       );
+      dashY += dashLen + 30 + 45 * dt;
+      dashIndex++;
     }
 
     // Cielo infantil.
-    drawCrayonSun(g, 118, 69, 29);
-    drawCrayonCloud(g, 365, 74, 0.82, 3000);
-    drawCrayonCloud(g, 765, 62, 0.72, 3100);
+    drawCrayonSun(g, 70, 74, 28);
+    drawCrayonCloud(g, 275, 72, 0.58, 3000);
+    drawCrayonCloud(g, 446, 145, 0.46, 3100);
 
     var flakes = [
-      [255, 43, 13], [530, 45, 13], [633, 78, 14], [861, 51, 12],
-      [82, 157, 14], [394, 170, 12], [716, 143, 13], [881, 136, 10]
+      [155, 55, 11], [355, 112, 12], [500, 62, 9],
+      [92, 185, 11], [450, 225, 12], [62, 320, 9],
+      [492, 365, 10], [82, 535, 9], [468, 575, 10]
     ];
 
     for (var f = 0; f < flakes.length; f++) {
       drawCrayonSnowflake(g, flakes[f][0], flakes[f][1], flakes[f][2], 3200 + f * 17);
     }
 
-    // Decoración navideña a los lados, dejando libre toda la carretera.
-    drawCrayonHouse(g, 150, 345, 0.82, "#df3a32", "#cf312d", 3400);
-    drawCrayonTree(g, 284, 350, 0.72, 3500);
+    // Decoración navideña adaptada al formato vertical y fuera de la carretera.
+    drawCrayonHouse(g, 82, 300, 0.54, "#df3a32", "#cf312d", 3400);
+    drawCrayonHouse(g, 462, 332, 0.52, "#f2ca34", "#dc3a32", 3600);
 
-    drawCrayonHouse(g, 825, 338, 0.82, "#f2ca34", "#dc3a32", 3600);
-    drawCrayonTree(g, 915, 350, 0.72, 3700);
+    drawCrayonTree(g, 62, 465, 0.50, 3500);
+    drawCrayonTree(g, 485, 500, 0.48, 3700);
+    drawCrayonTree(g, 55, 645, 0.38, 3750);
+    drawCrayonTree(g, 492, 690, 0.36, 3770);
 
-    drawCrayonPresent(g, 92, 455, 0.78, 3800);
-    drawCrayonCandyCane(g, 865, 470, 0.80);
+    drawCrayonPresent(g, 40, 805, 0.46, 3800);
+    drawCrayonCandyCane(g, 505, 820, 0.52);
 
     crayonBackgroundCanvas = bg;
   }
@@ -903,24 +948,17 @@ button:disabled { opacity: .55; }
   function updateGame() {
     if (!state.running || state.gameOver) return;
 
-    state.player.x = clamp(state.player.x, W * 0.28, W * 0.72);
+    var playerHalfRange = roadHalfWidthAt(state.player.y) * 0.88;
+    state.player.x = clamp(
+      state.player.x,
+      W / 2 - playerHalfRange,
+      W / 2 + playerHalfRange
+    );
 
-    // Ventana segura para las estrellas:
-    // 1) normalmente aparecen muñecos en cinco posiciones;
-    // 2) cuando toca una estrella, dejamos de crear muñecos nuevos;
-    // 3) esperamos a que los muñecos que ya estaban salgan de la pantalla;
-    // 4) la estrella aparece sola;
-    // 5) los muñecos regresan después de recogerla o dejarla pasar.
-    if (!state.rewardPending && state.rewards.length === 0) {
-      state.spawnCounter++;
-      if (state.spawnCounter >= state.nextSpawn) {
-        spawnObstacle();
-        state.spawnCounter = 0;
-        state.nextSpawn = randomSpawnDelay();
-      }
-    }
-
-    // El contador de recompensa sigue avanzando durante la ronda normal.
+    // Las estrellas ahora aparecen mezcladas con los muñecos.
+    // Su única regla especial es que el carril de la estrella queda reservado:
+    // no puede tener un muñeco cuando nace y tampoco se generan nuevos
+    // muñecos en ese carril mientras la estrella siga visible.
     if (!state.rewardPending && state.rewards.length === 0) {
       state.rewardCounter++;
       if (state.rewardCounter >= state.rewardEvery) {
@@ -928,14 +966,28 @@ button:disabled { opacity: .55; }
       }
     }
 
-    // Si toca una estrella, primero esperamos una carretera completamente libre.
-    if (state.rewardPending && state.obstacles.length === 0 && state.rewards.length === 0) {
-      spawnReward();
-      state.rewardPending = false;
-      state.rewardCounter = 0;
-      state.rewardEvery = randomRewardDelay();
-      state.spawnCounter = 0;
-      state.nextSpawn = randomSpawnDelay();
+    // Cuando toca una estrella intentamos colocarla en uno de los carriles libres.
+    // Si los cinco están ocupados, esperamos a que se libere uno, pero dejamos
+    // los muñecos que ya están en pantalla para que la estrella aparezca entre ellos.
+    if (state.rewardPending && state.rewards.length === 0) {
+      if (spawnReward()) {
+        state.rewardPending = false;
+        state.rewardCounter = 0;
+        state.rewardEvery = randomRewardDelay();
+      }
+    }
+
+    // Los muñecos siguen apareciendo aunque haya una estrella; simplemente
+    // respetan el carril reservado de esa estrella. Si estamos esperando una
+    // estrella y todavía no hay carril libre, no añadimos más muñecos hasta
+    // que se abra un espacio.
+    if (!state.rewardPending) {
+      state.spawnCounter++;
+      if (state.spawnCounter >= state.nextSpawn) {
+        spawnObstacle();
+        state.spawnCounter = 0;
+        state.nextSpawn = randomSpawnDelay();
+      }
     }
 
     for (var i = 0; i < state.obstacles.length; i++) {
@@ -1057,7 +1109,10 @@ button:disabled { opacity: .55; }
     var offset = smoothFaceX - calibratedCenter;
     var normalized = clamp(0.5 + offset * 3.2, 0, 1);
 
-    state.player.x = W * 0.28 + normalized * (W * 0.44);
+    // En vertical el movimiento se adapta al ancho real de la carretera
+    // justo donde está Pollito.
+    var playerHalfRange = roadHalfWidthAt(state.player.y) * 0.88;
+    state.player.x = W / 2 + (normalized * 2 - 1) * playerHalfRange;
     cameraStatusEl.textContent = "Rostro detectado";
   }
 
