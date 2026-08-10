@@ -996,8 +996,8 @@ button:disabled { opacity: .55; }
     ctx.ellipse(
       x,
       y + 38 * scale,
-      28 * scale,
-      7 * scale,
+      38 * scale,
+      9 * scale,
       0,
       0,
       Math.PI * 2
@@ -1010,7 +1010,7 @@ button:disabled { opacity: .55; }
         snowmanImage,
         x,
         y - 7 * scale,
-        105 * scale
+        150 * scale
       );
       return;
     }
@@ -1160,10 +1160,10 @@ button:disabled { opacity: .55; }
 
       var obstacleScale = obstacleScaleAt(obstacle.y);
       var collision =
-        state.player.x - 22 < obstacle.x + 30 * obstacleScale &&
-        state.player.x + 22 > obstacle.x - 30 * obstacleScale &&
-        state.player.y - 50 < obstacle.y + 48 * obstacleScale &&
-        state.player.y + 55 > obstacle.y - 62 * obstacleScale;
+        state.player.x - 22 < obstacle.x + 42 * obstacleScale &&
+        state.player.x + 22 > obstacle.x - 42 * obstacleScale &&
+        state.player.y - 50 < obstacle.y + 68 * obstacleScale &&
+        state.player.y + 55 > obstacle.y - 82 * obstacleScale;
 
       if (collision) {
         state.gameOver = true;
