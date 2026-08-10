@@ -17,10 +17,11 @@
     #app { width: min(1100px, 100%); padding: 8px; }
     .hud {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: 1fr;
       gap: 8px;
       margin-bottom: 8px;
     }
+    .hud .status-hidden { display: none; }
     .card {
       background: white;
       border: 2px solid #ddd;
@@ -119,8 +120,8 @@ button:disabled { opacity: .55; }
 <main id="app">
   <section class="hud">
     <div class="card"><small>Puntaje</small><strong id="score">0</strong></div>
-    <div class="card"><small>Cámara</small><strong id="cameraStatus">Apagada</strong></div>
-    <div class="card"><small>Juego</small><strong id="gameStatus">Listo</strong></div>
+    <div class="card status-hidden" aria-hidden="true"><small>Cámara</small><strong id="cameraStatus">Apagada</strong></div>
+    <div class="card status-hidden" aria-hidden="true"><small>Juego</small><strong id="gameStatus">Listo</strong></div>
   </section>
 
   <section class="game-wrap">
@@ -200,6 +201,7 @@ button:disabled { opacity: .55; }
     nextSpawn: BASE_SPAWN_EVERY,
     rewardCounter: 0,
     rewardEvery: 340,
+    rewardPending: false,
     lastObstacleLane: -1,
     player: { x: W / 2, y: H - 92, speed: 7 },
     obstacles: [],
@@ -264,6 +266,7 @@ button:disabled { opacity: .55; }
     state.nextSpawn = randomSpawnDelay();
     state.rewardCounter = 0;
     state.rewardEvery = randomRewardDelay();
+    state.rewardPending = false;
     state.lastObstacleLane = -1;
     state.player.x = W / 2;
     state.obstacles = [];
@@ -322,92 +325,455 @@ button:disabled { opacity: .55; }
     });
   }
 
-  function drawPaper() {
-    ctx.fillStyle = "#fffdf2";
-    ctx.fillRect(0, 0, W, H);
+  // Fondo estilo crayón inspirado en un dibujo infantil sobre hoja de cuaderno.
+  // Se construye una sola vez para no gastar batería redibujando toda la textura.
+  var crayonBackgroundCanvas = null;
 
-    ctx.strokeStyle = "rgba(92,151,210,.17)";
-    ctx.lineWidth = 2;
-    for (var y = 30; y < H; y += 30) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(W, y);
-      ctx.stroke();
-    }
-
-    ctx.strokeStyle = "rgba(220,80,100,.20)";
-    ctx.beginPath();
-    ctx.moveTo(55, 0);
-    ctx.lineTo(55, H);
-    ctx.stroke();
+  function seededNoise(seed) {
+    var value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return value - Math.floor(value);
   }
 
-  function drawTree(x, y, scale) {
-    ctx.fillStyle = "#8b5a2b";
-    ctx.fillRect(x - 6 * scale, y, 12 * scale, 25 * scale);
+  function roughLine(g, x1, y1, x2, y2, color, width, seed, passes) {
+    passes = passes || 3;
+    g.save();
+    g.strokeStyle = color;
+    g.lineCap = "round";
+    g.lineJoin = "round";
 
-    ctx.fillStyle = "#3da55b";
-    var layers = [
-      [-70, 36, -15],
-      [-50, 31, 2],
-      [-30, 26, 13]
-    ];
-
-    for (var i = 0; i < layers.length; i++) {
-      var layer = layers[i];
-      ctx.beginPath();
-      ctx.moveTo(x, y + layer[0] * scale);
-      ctx.lineTo(x - layer[1] * scale, y + layer[2] * scale);
-      ctx.lineTo(x + layer[1] * scale, y + layer[2] * scale);
-      ctx.closePath();
-      ctx.fill();
+    for (var p = 0; p < passes; p++) {
+      var j1 = (seededNoise(seed + p * 7.1) - 0.5) * 3.2;
+      var j2 = (seededNoise(seed + p * 11.7) - 0.5) * 3.2;
+      g.globalAlpha = 0.58 + seededNoise(seed + p * 3.7) * 0.24;
+      g.lineWidth = Math.max(1, width + (seededNoise(seed + p * 5.3) - 0.5) * 1.8);
+      g.beginPath();
+      g.moveTo(x1 + j1, y1 + j2);
+      g.lineTo(x2 - j2, y2 + j1);
+      g.stroke();
     }
 
-    ctx.fillStyle = "#ffd43b";
-    ctx.beginPath();
-    ctx.arc(x, y - 74 * scale, 5 * scale, 0, Math.PI * 2);
-    ctx.fill();
+    g.restore();
+  }
+
+  function polygonPath(g, points) {
+    g.beginPath();
+    g.moveTo(points[0][0], points[0][1]);
+    for (var i = 1; i < points.length; i++) {
+      g.lineTo(points[i][0], points[i][1]);
+    }
+    g.closePath();
+  }
+
+  function roughPolygon(g, points, fillColor, strokeColor, seed, hatchColor) {
+    g.save();
+    polygonPath(g, points);
+    g.fillStyle = fillColor;
+    g.globalAlpha = 0.84;
+    g.fill();
+    g.restore();
+
+    g.save();
+    polygonPath(g, points);
+    g.clip();
+
+    var xs = points.map(function (pt) { return pt[0]; });
+    var ys = points.map(function (pt) { return pt[1]; });
+    var minX = Math.min.apply(null, xs);
+    var maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys);
+    var maxY = Math.max.apply(null, ys);
+
+    g.strokeStyle = hatchColor || strokeColor;
+    g.lineWidth = 2.2;
+    g.globalAlpha = 0.22;
+    for (var y = minY - 20; y <= maxY + 20; y += 7) {
+      var jitter = (seededNoise(seed + y * 0.13) - 0.5) * 7;
+      g.beginPath();
+      g.moveTo(minX - 20, y + jitter);
+      g.lineTo(maxX + 20, y - 9 + jitter);
+      g.stroke();
+    }
+    g.restore();
+
+    for (var e = 0; e < points.length; e++) {
+      var a = points[e];
+      var b = points[(e + 1) % points.length];
+      roughLine(g, a[0], a[1], b[0], b[1], strokeColor, 3, seed + e * 17, 3);
+    }
+  }
+
+  function roughCircle(g, x, y, r, fillColor, strokeColor, seed) {
+    g.save();
+    g.fillStyle = fillColor;
+    g.globalAlpha = 0.88;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
+
+    g.save();
+    g.strokeStyle = strokeColor;
+    g.lineCap = "round";
+    for (var p = 0; p < 3; p++) {
+      g.globalAlpha = 0.58 + p * 0.10;
+      g.lineWidth = 2 + p * 0.35;
+      var jitter = (seededNoise(seed + p * 9) - 0.5) * 2.5;
+      g.beginPath();
+      g.arc(x + jitter, y - jitter, Math.max(1, r + jitter * 0.35), 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  function drawCrayonStarShape(g, x, y, outerR, color, seed) {
+    var points = [];
+    for (var i = 0; i < 10; i++) {
+      var angle = -Math.PI / 2 + i * Math.PI / 5;
+      var radius = i % 2 === 0 ? outerR : outerR * 0.43;
+      points.push([
+        x + Math.cos(angle) * radius,
+        y + Math.sin(angle) * radius
+      ]);
+    }
+    roughPolygon(g, points, color, "#d79b12", seed, "#f1ae1a");
+  }
+
+  function drawCrayonSnowflake(g, x, y, r, seed) {
+    for (var i = 0; i < 4; i++) {
+      var angle = i * Math.PI / 4;
+      var dx = Math.cos(angle) * r;
+      var dy = Math.sin(angle) * r;
+      roughLine(g, x - dx, y - dy, x + dx, y + dy, "#2e86c7", 2.4, seed + i * 13, 2);
+    }
+  }
+
+  function drawCrayonCloud(g, x, y, s, seed) {
+    var blobs = [
+      [x - 26 * s, y + 4 * s, 20 * s],
+      [x, y - 8 * s, 27 * s],
+      [x + 30 * s, y + 4 * s, 20 * s],
+      [x + 4 * s, y + 12 * s, 35 * s]
+    ];
+
+    for (var i = 0; i < blobs.length; i++) {
+      roughCircle(g, blobs[i][0], blobs[i][1], blobs[i][2], "#fffdf2", "#408fd2", seed + i * 8);
+    }
+  }
+
+  function drawCrayonSun(g, x, y, r) {
+    for (var i = 0; i < 12; i++) {
+      var angle = i * Math.PI / 6;
+      roughLine(
+        g,
+        x + Math.cos(angle) * (r + 8),
+        y + Math.sin(angle) * (r + 8),
+        x + Math.cos(angle) * (r + 27),
+        y + Math.sin(angle) * (r + 27),
+        "#f3b51b",
+        4,
+        100 + i * 9,
+        3
+      );
+    }
+
+    roughCircle(g, x, y, r, "#ffd34d", "#d59a13", 140);
+    roughCircle(g, x - r * 0.33, y - 4, 3.2, "#2b2b2b", "#2b2b2b", 151);
+    roughCircle(g, x + r * 0.33, y - 4, 3.2, "#2b2b2b", "#2b2b2b", 152);
+
+    g.save();
+    g.strokeStyle = "#2b2b2b";
+    g.lineWidth = 3;
+    g.lineCap = "round";
+    g.beginPath();
+    g.arc(x, y + 4, r * 0.45, 0.15, Math.PI - 0.15);
+    g.stroke();
+    g.restore();
+  }
+
+  function drawCrayonTree(g, x, baseY, s, seed) {
+    roughPolygon(g, [
+      [x - 8 * s, baseY - 5 * s],
+      [x + 8 * s, baseY - 5 * s],
+      [x + 7 * s, baseY + 25 * s],
+      [x - 7 * s, baseY + 25 * s]
+    ], "#8b572a", "#6b3f20", seed + 1, "#6b3f20");
+
+    roughPolygon(g, [
+      [x, baseY - 112 * s],
+      [x - 37 * s, baseY - 55 * s],
+      [x + 37 * s, baseY - 55 * s]
+    ], "#249454", "#167640", seed + 2, "#19894a");
+
+    roughPolygon(g, [
+      [x, baseY - 88 * s],
+      [x - 46 * s, baseY - 28 * s],
+      [x + 46 * s, baseY - 28 * s]
+    ], "#2aa15a", "#177a43", seed + 3, "#1a8d4c");
+
+    roughPolygon(g, [
+      [x, baseY - 62 * s],
+      [x - 52 * s, baseY - 3 * s],
+      [x + 52 * s, baseY - 3 * s]
+    ], "#2fa75f", "#177a43", seed + 4, "#218f50");
+
+    var ornaments = [
+      [-19, -66, "#e73c32"],
+      [18, -53, "#2878cc"],
+      [-6, -37, "#f1c232"],
+      [27, -25, "#e73c32"],
+      [-28, -24, "#f6a62b"]
+    ];
+
+    for (var i = 0; i < ornaments.length; i++) {
+      roughCircle(
+        g,
+        x + ornaments[i][0] * s,
+        baseY + ornaments[i][1] * s,
+        5.5 * s,
+        ornaments[i][2],
+        ornaments[i][2],
+        seed + 20 + i
+      );
+    }
+
+    drawCrayonStarShape(g, x, baseY - 124 * s, 11 * s, "#ffd33d", seed + 40);
+  }
+
+  function drawCrayonHouse(g, x, baseY, s, bodyColor, roofColor, seed) {
+    var w = 118 * s;
+    var h = 86 * s;
+    var left = x - w / 2;
+    var top = baseY - h;
+
+    roughPolygon(g, [
+      [left, top],
+      [left + w, top],
+      [left + w, baseY],
+      [left, baseY]
+    ], bodyColor, roofColor, seed, bodyColor);
+
+    roughPolygon(g, [
+      [x, top - 54 * s],
+      [left - 14 * s, top + 8 * s],
+      [left + w + 14 * s, top + 8 * s]
+    ], roofColor, roofColor, seed + 10, roofColor);
+
+    roughLine(g, left - 4 * s, top + 3 * s, x, top - 47 * s, "#f7fbff", 8 * s, seed + 14, 3);
+    roughLine(g, x, top - 47 * s, left + w + 4 * s, top + 3 * s, "#f7fbff", 8 * s, seed + 15, 3);
+    roughLine(g, left - 4 * s, top + 6 * s, x, top - 44 * s, "#74b4e1", 2.1 * s, seed + 16, 2);
+    roughLine(g, x, top - 44 * s, left + w + 4 * s, top + 6 * s, "#74b4e1", 2.1 * s, seed + 17, 2);
+
+    roughPolygon(g, [
+      [x + 27 * s, top - 35 * s],
+      [x + 42 * s, top - 35 * s],
+      [x + 42 * s, top - 6 * s],
+      [x + 27 * s, top - 6 * s]
+    ], "#bd342f", "#92231f", seed + 18, "#a42522");
+
+    var sx = x + 35 * s;
+    var sy = top - 42 * s;
+    roughLine(g, sx, sy, sx - 8 * s, sy - 18 * s, "#777", 5 * s, seed + 19, 3);
+    roughLine(g, sx - 8 * s, sy - 18 * s, sx + 1 * s, sy - 35 * s, "#777", 5 * s, seed + 20, 3);
+    roughLine(g, sx + 1 * s, sy - 35 * s, sx - 6 * s, sy - 48 * s, "#777", 5 * s, seed + 21, 3);
+
+    roughPolygon(g, [
+      [x - 13 * s, baseY - 38 * s],
+      [x + 13 * s, baseY - 38 * s],
+      [x + 13 * s, baseY],
+      [x - 13 * s, baseY]
+    ], "#6f421f", "#553319", seed + 30, "#5d361a");
+
+    var wx = left + 29 * s;
+    var wy = top + 35 * s;
+    roughPolygon(g, [
+      [wx - 13 * s, wy - 12 * s],
+      [wx + 13 * s, wy - 12 * s],
+      [wx + 13 * s, wy + 12 * s],
+      [wx - 13 * s, wy + 12 * s]
+    ], "#62a9df", "#325b86", seed + 35, "#4e9ad3");
+
+    roughLine(g, wx, wy - 12 * s, wx, wy + 12 * s, "#69461f", 2.5 * s, seed + 36, 2);
+    roughLine(g, wx - 13 * s, wy, wx + 13 * s, wy, "#69461f", 2.5 * s, seed + 37, 2);
+  }
+
+  function drawCrayonPresent(g, x, y, s, seed) {
+    roughPolygon(g, [
+      [x - 30 * s, y - 34 * s],
+      [x + 30 * s, y - 34 * s],
+      [x + 30 * s, y + 24 * s],
+      [x - 30 * s, y + 24 * s]
+    ], "#2e9d58", "#1c7040", seed, "#248649");
+
+    roughLine(g, x, y - 34 * s, x, y + 24 * s, "#d93838", 9 * s, seed + 2, 3);
+    roughLine(g, x - 30 * s, y - 5 * s, x + 30 * s, y - 5 * s, "#d93838", 9 * s, seed + 3, 3);
+    roughLine(g, x, y - 34 * s, x - 18 * s, y - 53 * s, "#d93838", 5 * s, seed + 5, 3);
+    roughLine(g, x - 18 * s, y - 53 * s, x - 27 * s, y - 39 * s, "#d93838", 5 * s, seed + 6, 3);
+    roughLine(g, x, y - 34 * s, x + 18 * s, y - 53 * s, "#d93838", 5 * s, seed + 7, 3);
+    roughLine(g, x + 18 * s, y - 53 * s, x + 27 * s, y - 39 * s, "#d93838", 5 * s, seed + 8, 3);
+  }
+
+  function drawCrayonCandyCane(g, x, y, s) {
+    g.save();
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    g.strokeStyle = "#faf6e9";
+    g.lineWidth = 16 * s;
+    g.beginPath();
+    g.moveTo(x, y + 42 * s);
+    g.lineTo(x, y - 24 * s);
+    g.bezierCurveTo(x, y - 56 * s, x + 44 * s, y - 56 * s, x + 44 * s, y - 25 * s);
+    g.stroke();
+
+    g.strokeStyle = "#c92f35";
+    g.lineWidth = 5.5 * s;
+    g.setLineDash([12 * s, 12 * s]);
+    g.beginPath();
+    g.moveTo(x, y + 42 * s);
+    g.lineTo(x, y - 24 * s);
+    g.bezierCurveTo(x, y - 56 * s, x + 44 * s, y - 56 * s, x + 44 * s, y - 25 * s);
+    g.stroke();
+    g.setLineDash([]);
+    g.restore();
+  }
+
+  function buildCrayonBackground() {
+    var bg = document.createElement("canvas");
+    bg.width = W;
+    bg.height = H;
+    var g = bg.getContext("2d");
+
+    // Papel cálido.
+    g.fillStyle = "#fbf6e8";
+    g.fillRect(0, 0, W, H);
+
+    // Textura leve de papel.
+    for (var t = 0; t < 180; t++) {
+      var px = seededNoise(300 + t * 5.1) * W;
+      var py = seededNoise(700 + t * 7.7) * H;
+      var len = 2 + seededNoise(900 + t * 3.3) * 8;
+      g.strokeStyle = "rgba(120,100,75,.055)";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(px, py);
+      g.lineTo(px + len, py + (seededNoise(1100 + t) - 0.5) * 3);
+      g.stroke();
+    }
+
+    // Líneas de cuaderno y margen rojo.
+    for (var ly = 28; ly < H; ly += 30) {
+      roughLine(g, 0, ly, W, ly, "rgba(78,151,211,.28)", 1.5, 1200 + ly, 2);
+    }
+    roughLine(g, 60, 0, 60, H, "rgba(217,72,83,.34)", 2.2, 1300, 3);
+
+    // Nieve lateral con rayones azules.
+    g.fillStyle = "rgba(246,252,255,.82)";
+    g.fillRect(0, H * 0.46, W, H * 0.54);
+
+    for (var s = 0; s < 38; s++) {
+      var sideLeft = s % 2 === 0;
+      var nx = sideLeft
+        ? seededNoise(1400 + s * 4.2) * W * 0.30
+        : W * 0.70 + seededNoise(1600 + s * 4.4) * W * 0.30;
+      var ny = H * 0.50 + seededNoise(1800 + s * 5.6) * H * 0.46;
+      var nlen = 18 + seededNoise(2000 + s * 2.7) * 55;
+      roughLine(g, nx, ny, nx + nlen, ny - 5, "rgba(62,149,214,.33)", 2.4, 2100 + s * 9, 2);
+    }
+
+    // Carretera de frente, en perspectiva, con relleno de crayón.
+    var road = [
+      [W * 0.42, 0],
+      [W * 0.58, 0],
+      [W * 0.76, H],
+      [W * 0.24, H]
+    ];
+    roughPolygon(g, road, "#6e7075", "#555960", 2300, "#4f5257");
+
+    g.save();
+    polygonPath(g, road);
+    g.clip();
+    for (var ry = -10; ry < H + 20; ry += 9) {
+      var rj = (seededNoise(2500 + ry) - 0.5) * 10;
+      g.strokeStyle = "rgba(45,48,52,.20)";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(W * 0.18, ry + rj);
+      g.lineTo(W * 0.82, ry - 8 + rj);
+      g.stroke();
+    }
+    g.restore();
+
+    // Línea amarilla discontinua.
+    var dashYs = [14, 76, 144, 220, 306, 402, 500];
+    var dashHeights = [24, 27, 31, 35, 40, 46, 54];
+
+    for (var d = 0; d < dashYs.length; d++) {
+      roughLine(
+        g,
+        W / 2,
+        dashYs[d],
+        W / 2 + (seededNoise(2800 + d) - 0.5) * 3,
+        dashYs[d] + dashHeights[d],
+        "#f2c83e",
+        7 + d * 0.35,
+        2850 + d * 13,
+        3
+      );
+    }
+
+    // Cielo infantil.
+    drawCrayonSun(g, 118, 69, 29);
+    drawCrayonCloud(g, 365, 74, 0.82, 3000);
+    drawCrayonCloud(g, 765, 62, 0.72, 3100);
+
+    var flakes = [
+      [255, 43, 13], [530, 45, 13], [633, 78, 14], [861, 51, 12],
+      [82, 157, 14], [394, 170, 12], [716, 143, 13], [881, 136, 10]
+    ];
+
+    for (var f = 0; f < flakes.length; f++) {
+      drawCrayonSnowflake(g, flakes[f][0], flakes[f][1], flakes[f][2], 3200 + f * 17);
+    }
+
+    // Decoración navideña a los lados, dejando libre toda la carretera.
+    drawCrayonHouse(g, 150, 345, 0.82, "#df3a32", "#cf312d", 3400);
+    drawCrayonTree(g, 284, 350, 0.72, 3500);
+
+    drawCrayonHouse(g, 825, 338, 0.82, "#f2ca34", "#dc3a32", 3600);
+    drawCrayonTree(g, 915, 350, 0.72, 3700);
+
+    drawCrayonPresent(g, 92, 455, 0.78, 3800);
+    drawCrayonCandyCane(g, 865, 470, 0.80);
+
+    crayonBackgroundCanvas = bg;
   }
 
   function drawBackground() {
-    drawPaper();
+    if (!crayonBackgroundCanvas) {
+      buildCrayonBackground();
+    }
 
-    ctx.fillStyle = "#dff3ff";
-    ctx.fillRect(0, H * 0.57, W, H * 0.43);
+    ctx.drawImage(crayonBackgroundCanvas, 0, 0);
 
-    drawTree(95, H - 90, 1.15);
-    drawTree(175, H - 70, 0.85);
-    drawTree(W - 95, H - 90, 1.15);
-    drawTree(W - 175, H - 70, 0.85);
-
+    // Copos móviles suaves sobre el fondo.
     for (var i = 0; i < state.snow.length; i++) {
       var flake = state.snow[i];
-      ctx.fillStyle = "#abd9f5";
+      ctx.save();
+      ctx.strokeStyle = "rgba(70,158,218,.38)";
+      ctx.lineWidth = Math.max(1, flake.r * 0.65);
+      ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.arc(flake.x, flake.y, flake.r, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(flake.x - flake.r * 1.8, flake.y);
+      ctx.lineTo(flake.x + flake.r * 1.8, flake.y);
+      ctx.moveTo(flake.x, flake.y - flake.r * 1.8);
+      ctx.lineTo(flake.x, flake.y + flake.r * 1.8);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
+  // La carretera ya forma parte del fondo de crayón.
   function drawRoad() {
-    ctx.fillStyle = "#696d75";
-    ctx.beginPath();
-    ctx.moveTo(W * 0.42, 0);
-    ctx.lineTo(W * 0.58, 0);
-    ctx.lineTo(W * 0.76, H);
-    ctx.lineTo(W * 0.24, H);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = "#ffe070";
-    ctx.lineWidth = 7;
-    ctx.setLineDash([35, 28]);
-    ctx.lineDashOffset = -(performance.now() / 12);
-    ctx.beginPath();
-    ctx.moveTo(W / 2, 0);
-    ctx.lineTo(W / 2, H);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    return;
   }
 
   function drawPlayer() {
@@ -539,20 +905,37 @@ button:disabled { opacity: .55; }
 
     state.player.x = clamp(state.player.x, W * 0.28, W * 0.72);
 
-    // Muñecos: cinco posiciones, pero con tiempo de aparición variable.
-    state.spawnCounter++;
-    if (state.spawnCounter >= state.nextSpawn) {
-      spawnObstacle();
-      state.spawnCounter = 0;
-      state.nextSpawn = randomSpawnDelay();
+    // Ventana segura para las estrellas:
+    // 1) normalmente aparecen muñecos en cinco posiciones;
+    // 2) cuando toca una estrella, dejamos de crear muñecos nuevos;
+    // 3) esperamos a que los muñecos que ya estaban salgan de la pantalla;
+    // 4) la estrella aparece sola;
+    // 5) los muñecos regresan después de recogerla o dejarla pasar.
+    if (!state.rewardPending && state.rewards.length === 0) {
+      state.spawnCounter++;
+      if (state.spawnCounter >= state.nextSpawn) {
+        spawnObstacle();
+        state.spawnCounter = 0;
+        state.nextSpawn = randomSpawnDelay();
+      }
     }
 
-    // Estrellas: aparecen de vez en cuando de forma independiente.
-    state.rewardCounter++;
-    if (state.rewardCounter >= state.rewardEvery) {
+    // El contador de recompensa sigue avanzando durante la ronda normal.
+    if (!state.rewardPending && state.rewards.length === 0) {
+      state.rewardCounter++;
+      if (state.rewardCounter >= state.rewardEvery) {
+        state.rewardPending = true;
+      }
+    }
+
+    // Si toca una estrella, primero esperamos una carretera completamente libre.
+    if (state.rewardPending && state.obstacles.length === 0 && state.rewards.length === 0) {
       spawnReward();
+      state.rewardPending = false;
       state.rewardCounter = 0;
       state.rewardEvery = randomRewardDelay();
+      state.spawnCounter = 0;
+      state.nextSpawn = randomSpawnDelay();
     }
 
     for (var i = 0; i < state.obstacles.length; i++) {
