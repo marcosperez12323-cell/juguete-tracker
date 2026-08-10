@@ -1,0 +1,1433 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Pollito navideño vertical — control de cabeza</title>
+
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #f4eee3;
+      font-family: Arial, sans-serif;
+    }
+    body { display: flex; justify-content: center; }
+    #app { width: min(480px, 100%); padding: 8px; }
+    .hud {
+      position: absolute;
+      z-index: 3;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(250px, 58%);
+      margin: 0;
+      pointer-events: none;
+    }
+    .hud .status-hidden { display: none; }
+    .card {
+      background: rgba(255,253,243,.96);
+      border: 4px solid #2d6f9f;
+      border-radius: 18px;
+      padding: 7px 12px 8px;
+      text-align: center;
+      box-shadow: 0 5px 0 rgba(255,255,255,.88), 0 8px 12px rgba(0,0,0,.14);
+    }
+    .card small {
+      color: #222;
+      display: block;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .card strong {
+      display: block;
+      color: #288a36;
+      font-size: 34px;
+      line-height: 1;
+      margin-top: 2px;
+    }
+    .game-wrap {
+      position: relative;
+      overflow: hidden;
+      border: 2px solid #d7cec1;
+      border-radius: 18px;
+      background: #fffdf3;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      touch-action: none;
+    }
+    /* La cámara sigue funcionando, pero su vista previa queda fuera de pantalla. */
+    video {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .controls.single-control {
+      grid-template-columns: 1fr;
+    }
+    button {
+      border: 0;
+      border-radius: 14px;
+      padding: 13px 7px;
+      color: white;
+      background: #d9485f;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    button.green { background: #3f8f5f; }
+button:disabled { opacity: .55; }
+    #cameraPanel {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(255,253,243,.93);
+    }
+    #cameraPanel > div {
+      max-width: 86%;
+      padding: 18px;
+      background: white;
+      border: 2px solid #ddd;
+      border-radius: 18px;
+      text-align: center;
+    }
+    #cameraPanel h2 { margin: 0 0 8px; }
+    #cameraMessage {
+      min-height: 20px;
+      margin: 8px 0 0;
+      color: #555;
+      font-size: 14px;
+    }
+@media (max-width: 650px) {
+      #app { padding: 4px; }
+      .card { padding: 6px 8px; }
+      .card strong { font-size: 15px; }
+      button { padding: 11px 5px; font-size: 13px; }
+    }
+  </style>
+
+  <!-- Script clásico: NO usa type="module" ni import() -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"
+    crossorigin="anonymous">
+  </script>
+</head>
+
+<body>
+<main id="app">
+  <section class="game-wrap">
+    <section class="hud">
+      <div class="card"><small>Puntaje</small><strong id="score">0</strong></div>
+      <div class="card status-hidden" aria-hidden="true"><small>Cámara</small><strong id="cameraStatus">Apagada</strong></div>
+      <div class="card status-hidden" aria-hidden="true"><small>Juego</small><strong id="gameStatus">Listo</strong></div>
+    </section>
+    <canvas id="game" width="540" height="960"></canvas>
+    <video id="camera" autoplay playsinline muted></video>
+
+    <div id="cameraPanel">
+      <div>
+        <h2>Control con la cabeza</h2>
+        <p>Colócate frente a la cámara y presiona “Empezar juego”. Esquiva los muñecos y recoge estrellas para ganar +3.</p>
+        <p id="cameraMessage"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="controls single-control">
+    <button id="startGameButton" class="green">Empezar juego</button>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var video = document.getElementById("camera");
+
+  var scoreEl = document.getElementById("score");
+  var cameraStatusEl = document.getElementById("cameraStatus");
+  var gameStatusEl = document.getElementById("gameStatus");
+  var cameraPanel = document.getElementById("cameraPanel");
+  var cameraMessageEl = document.getElementById("cameraMessage");
+
+  var W = canvas.width;
+  var H = canvas.height;
+
+  var cameraStream = null;
+  var faceMesh = null;
+  var trackingEnabled = false;
+  var processingFrame = false;
+  var detectorLoopStarted = false;
+  var lastMirroredFaceX = 0.5;
+  var smoothFaceX = 0.5;
+  var calibratedCenter = 0.5;
+  var autoCalibrated = false;
+
+  // Personaje incrustado directamente en este archivo.
+  // No requiere subir pollito.png ni crear una carpeta de imágenes.
+  // IMÁGENES DEL JUEGO
+  var backgroundImage = new Image();
+  var backgroundReady = false;
+  backgroundImage.onload = function () { backgroundReady = true; };
+  backgroundImage.onerror = function () {
+    console.warn("No se pudo cargar images/fondo.png.");
+  };
+  backgroundImage.src = "images/fondo.png";
+
+  var characterFrames = [];
+  var CHARACTER_FRAME_COUNT = 6;
+  var CHARACTER_FRAME_MS = 90;
+
+  for (var frameIndex = 1; frameIndex <= CHARACTER_FRAME_COUNT; frameIndex++) {
+    var characterImage = new Image();
+    characterImage.src =
+      "images/personaje_" + String(frameIndex).padStart(2, "0") + ".png";
+    characterFrames.push(characterImage);
+  }
+
+  var snowmanImage = new Image();
+  var snowmanReady = false;
+  snowmanImage.onload = function () { snowmanReady = true; };
+  snowmanImage.onerror = function () {
+    console.warn("No se pudo cargar images/muneco.png.");
+  };
+  snowmanImage.src = "images/muneco.png";
+
+  var starImage = new Image();
+  var starReady = false;
+  starImage.onload = function () { starReady = true; };
+  starImage.onerror = function () {
+    console.warn("No se pudo cargar images/estrella.png.");
+  };
+  starImage.src = "images/estrella.png";
+
+  function drawImageCenteredByHeight(image, x, y, targetHeight) {
+    if (!image || !image.complete || !image.naturalWidth || !image.naturalHeight) {
+      return false;
+    }
+
+    var ratio = image.naturalWidth / image.naturalHeight;
+    var targetWidth = targetHeight * ratio;
+
+    ctx.drawImage(
+      image,
+      x - targetWidth / 2,
+      y - targetHeight / 2,
+      targetWidth,
+      targetHeight
+    );
+
+    return true;
+  }
+
+  // Dificultad independiente de los FPS.
+  // Todas las velocidades están en píxeles por segundo, no por fotograma.
+  // Así el juego corre prácticamente igual en computadora y móvil.
+  var BASE_SPEED = 240;
+  var MAX_SPEED = 240;
+  var SPEED_PER_POINT = 0;
+  var SPEED_ACCELERATION = 0;
+  var BASE_SPAWN_EVERY = 1.20;
+  var MIN_SPAWN_EVERY = 0.78;
+
+  // Geometría compartida por carretera, carriles y objetos.
+  var ROAD_HORIZON_Y = H * 0.33;
+  var ROAD_TOP_HALF = W * 0.055;
+  var ROAD_BOTTOM_HALF = W * 0.60;
+
+  // Cinco posiciones de paso para el formato vertical. Se abren con la perspectiva de la carretera.
+  var laneValues = [-0.90, -0.45, 0, 0.45, 0.90];
+
+  var state = {
+    running: false,
+    gameOver: false,
+    score: 0,
+    speed: BASE_SPEED,
+    targetSpeed: BASE_SPEED,
+    spawnCounter: 0,
+    spawnEvery: BASE_SPAWN_EVERY,
+    nextSpawn: BASE_SPAWN_EVERY,
+    rewardCounter: 0,
+    rewardEvery: 6.0,
+    rewardPending: false,
+    lastObstacleLane: -1,
+    player: { x: W / 2, y: H - 140, speed: 7 },
+    obstacles: [],
+    rewards: [],
+    rewardPopups: [],
+    snow: Array.from({ length: 65 }, function () {
+      return {
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 1 + Math.random() * 2,
+        s: 0.4 + Math.random()
+      };
+    })
+  };
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function randomSpawnDelay() {
+    // Segundos entre muñecos, con una pequeña variación para que no sea repetitivo.
+    return state.spawnEvery * (0.82 + Math.random() * 0.36);
+  }
+
+  function randomRewardDelay() {
+    // Una estrella aproximadamente cada 5 a 8 segundos, sin depender de los FPS.
+    return 5 + Math.random() * 3;
+  }
+
+  function roadDepth(y) {
+    return clamp((y - ROAD_HORIZON_Y) / (H - ROAD_HORIZON_Y), 0, 1);
+  }
+
+  function roadHalfWidthAt(y) {
+    var t = Math.pow(roadDepth(y), 1.12);
+    return ROAD_TOP_HALF + (ROAD_BOTTOM_HALF - ROAD_TOP_HALF) * t;
+  }
+
+  function xForLane(lane, y) {
+    return W / 2 + lane * roadHalfWidthAt(y) * 0.82;
+  }
+
+  function obstacleScaleAt(y) {
+    return 0.27 + roadDepth(y) * 1.02;
+  }
+
+  function rewardScaleAt(y) {
+    return 0.45 + roadDepth(y) * 0.90;
+  }
+
+  function perspectiveMotionAt(y) {
+    return 0.48 + roadDepth(y) * 0.92;
+  }
+
+  function updateDifficulty() {
+    // Velocidad constante durante toda la partida.
+    state.targetSpeed = BASE_SPEED;
+
+    // La frecuencia de aparición tampoco cambia con el puntaje.
+    state.spawnEvery = BASE_SPAWN_EVERY;
+  }
+
+  function addScore(points) {
+    state.score += points;
+    scoreEl.textContent = String(state.score);
+    updateDifficulty();
+  }
+
+  function resetGame() {
+    state.running = false;
+    state.gameOver = false;
+    state.score = 0;
+    state.speed = BASE_SPEED;
+    state.targetSpeed = BASE_SPEED;
+    state.spawnCounter = 0;
+    state.spawnEvery = BASE_SPAWN_EVERY;
+    state.nextSpawn = randomSpawnDelay();
+    state.rewardCounter = 0;
+    state.rewardEvery = randomRewardDelay();
+    state.rewardPending = false;
+    state.lastObstacleLane = -1;
+    state.player.x = W / 2;
+    state.obstacles = [];
+    state.rewards = [];
+    state.rewardPopups = [];
+    autoCalibrated = false;
+    calibratedCenter = 0.5;
+    smoothFaceX = 0.5;
+    scoreEl.textContent = "0";
+    gameStatusEl.textContent = "Listo";
+  }
+
+  function startGame() {
+    if (state.gameOver) resetGame();
+    state.running = true;
+    state.gameOver = false;
+    gameStatusEl.textContent = "Jugando";
+  }
+
+  function activeRewardLaneIndex() {
+    if (state.rewards.length === 0) return -1;
+    return state.rewards[0].laneIndex;
+  }
+
+  function pickObstacleLane() {
+    var reservedLane = activeRewardLaneIndex();
+    var available = [];
+
+    for (var i = 0; i < laneValues.length; i++) {
+      // Mientras haya una estrella en pantalla, su carril queda libre de muñecos.
+      if (i !== reservedLane) available.push(i);
+    }
+
+    if (available.length === 0) return -1;
+
+    var laneIndex = available[Math.floor(Math.random() * available.length)];
+
+    // Evita que el mismo carril salga demasiadas veces seguidas cuando sea posible.
+    if (available.length > 1 && laneIndex === state.lastObstacleLane) {
+      var alternatives = available.filter(function (index) {
+        return index !== state.lastObstacleLane;
+      });
+      laneIndex = alternatives[Math.floor(Math.random() * alternatives.length)];
+    }
+
+    state.lastObstacleLane = laneIndex;
+    return laneIndex;
+  }
+
+  function spawnObstacle() {
+    var laneIndex = pickObstacleLane();
+    if (laneIndex < 0) return false;
+
+    var laneJitter = (Math.random() - 0.5) * 0.08;
+    var lane = clamp(laneValues[laneIndex] + laneJitter, -0.95, 0.95);
+    var y = ROAD_HORIZON_Y + 4;
+
+    state.obstacles.push({
+      laneIndex: laneIndex,
+      lane: lane,
+      x: xForLane(lane, y),
+      y: y
+    });
+    return true;
+  }
+
+  function spawnReward() {
+    // La estrella puede aparecer entre los muñecos, pero solo en un carril
+    // que actualmente no tenga ningún muñeco. Ese carril queda reservado
+    // hasta que la estrella sea recogida o salga de la pantalla.
+    var occupied = {};
+    for (var i = 0; i < state.obstacles.length; i++) {
+      occupied[state.obstacles[i].laneIndex] = true;
+    }
+
+    var freeLanes = [];
+    for (var laneIndex = 0; laneIndex < laneValues.length; laneIndex++) {
+      if (!occupied[laneIndex]) freeLanes.push(laneIndex);
+    }
+
+    if (freeLanes.length === 0) return false;
+
+    var chosenLaneIndex = freeLanes[Math.floor(Math.random() * freeLanes.length)];
+    var laneJitter = (Math.random() - 0.5) * 0.06;
+    var lane = clamp(laneValues[chosenLaneIndex] + laneJitter, -0.95, 0.95);
+    var y = ROAD_HORIZON_Y + 6;
+
+    state.rewards.push({
+      laneIndex: chosenLaneIndex,
+      lane: lane,
+      x: xForLane(lane, y),
+      y: y,
+      spin: Math.random() * Math.PI * 2
+    });
+    return true;
+  }
+
+  // Fondo estilo crayón inspirado en un dibujo infantil sobre hoja de cuaderno.
+  // Se construye una sola vez para no gastar batería redibujando toda la textura.
+  var crayonBackgroundCanvas = null;
+
+  function seededNoise(seed) {
+    var value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  }
+
+  function roughLine(g, x1, y1, x2, y2, color, width, seed, passes) {
+    passes = passes || 3;
+    g.save();
+    g.strokeStyle = color;
+    g.lineCap = "round";
+    g.lineJoin = "round";
+
+    for (var p = 0; p < passes; p++) {
+      var j1 = (seededNoise(seed + p * 7.1) - 0.5) * 3.2;
+      var j2 = (seededNoise(seed + p * 11.7) - 0.5) * 3.2;
+      g.globalAlpha = 0.58 + seededNoise(seed + p * 3.7) * 0.24;
+      g.lineWidth = Math.max(1, width + (seededNoise(seed + p * 5.3) - 0.5) * 1.8);
+      g.beginPath();
+      g.moveTo(x1 + j1, y1 + j2);
+      g.lineTo(x2 - j2, y2 + j1);
+      g.stroke();
+    }
+
+    g.restore();
+  }
+
+  function polygonPath(g, points) {
+    g.beginPath();
+    g.moveTo(points[0][0], points[0][1]);
+    for (var i = 1; i < points.length; i++) {
+      g.lineTo(points[i][0], points[i][1]);
+    }
+    g.closePath();
+  }
+
+  function roughPolygon(g, points, fillColor, strokeColor, seed, hatchColor) {
+    g.save();
+    polygonPath(g, points);
+    g.fillStyle = fillColor;
+    g.globalAlpha = 0.84;
+    g.fill();
+    g.restore();
+
+    g.save();
+    polygonPath(g, points);
+    g.clip();
+
+    var xs = points.map(function (pt) { return pt[0]; });
+    var ys = points.map(function (pt) { return pt[1]; });
+    var minX = Math.min.apply(null, xs);
+    var maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys);
+    var maxY = Math.max.apply(null, ys);
+
+    g.strokeStyle = hatchColor || strokeColor;
+    g.lineWidth = 2.2;
+    g.globalAlpha = 0.22;
+    for (var y = minY - 20; y <= maxY + 20; y += 7) {
+      var jitter = (seededNoise(seed + y * 0.13) - 0.5) * 7;
+      g.beginPath();
+      g.moveTo(minX - 20, y + jitter);
+      g.lineTo(maxX + 20, y - 9 + jitter);
+      g.stroke();
+    }
+    g.restore();
+
+    for (var e = 0; e < points.length; e++) {
+      var a = points[e];
+      var b = points[(e + 1) % points.length];
+      roughLine(g, a[0], a[1], b[0], b[1], strokeColor, 3, seed + e * 17, 3);
+    }
+  }
+
+  function roughCircle(g, x, y, r, fillColor, strokeColor, seed) {
+    g.save();
+    g.fillStyle = fillColor;
+    g.globalAlpha = 0.88;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
+
+    g.save();
+    g.strokeStyle = strokeColor;
+    g.lineCap = "round";
+    for (var p = 0; p < 3; p++) {
+      g.globalAlpha = 0.58 + p * 0.10;
+      g.lineWidth = 2 + p * 0.35;
+      var jitter = (seededNoise(seed + p * 9) - 0.5) * 2.5;
+      g.beginPath();
+      g.arc(x + jitter, y - jitter, Math.max(1, r + jitter * 0.35), 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  function drawCrayonStarShape(g, x, y, outerR, color, seed) {
+    var points = [];
+    for (var i = 0; i < 10; i++) {
+      var angle = -Math.PI / 2 + i * Math.PI / 5;
+      var radius = i % 2 === 0 ? outerR : outerR * 0.43;
+      points.push([
+        x + Math.cos(angle) * radius,
+        y + Math.sin(angle) * radius
+      ]);
+    }
+    roughPolygon(g, points, color, "#d79b12", seed, "#f1ae1a");
+  }
+
+  function drawCrayonSnowflake(g, x, y, r, seed) {
+    for (var i = 0; i < 4; i++) {
+      var angle = i * Math.PI / 4;
+      var dx = Math.cos(angle) * r;
+      var dy = Math.sin(angle) * r;
+      roughLine(g, x - dx, y - dy, x + dx, y + dy, "#2e86c7", 2.4, seed + i * 13, 2);
+    }
+  }
+
+  function drawCrayonCloud(g, x, y, s, seed) {
+    var blobs = [
+      [x - 26 * s, y + 4 * s, 20 * s],
+      [x, y - 8 * s, 27 * s],
+      [x + 30 * s, y + 4 * s, 20 * s],
+      [x + 4 * s, y + 12 * s, 35 * s]
+    ];
+
+    for (var i = 0; i < blobs.length; i++) {
+      roughCircle(g, blobs[i][0], blobs[i][1], blobs[i][2], "#fffdf2", "#408fd2", seed + i * 8);
+    }
+  }
+
+  function drawCrayonSun(g, x, y, r) {
+    for (var i = 0; i < 12; i++) {
+      var angle = i * Math.PI / 6;
+      roughLine(
+        g,
+        x + Math.cos(angle) * (r + 8),
+        y + Math.sin(angle) * (r + 8),
+        x + Math.cos(angle) * (r + 27),
+        y + Math.sin(angle) * (r + 27),
+        "#f3b51b",
+        4,
+        100 + i * 9,
+        3
+      );
+    }
+
+    roughCircle(g, x, y, r, "#ffd34d", "#d59a13", 140);
+    roughCircle(g, x - r * 0.33, y - 4, 3.2, "#2b2b2b", "#2b2b2b", 151);
+    roughCircle(g, x + r * 0.33, y - 4, 3.2, "#2b2b2b", "#2b2b2b", 152);
+
+    g.save();
+    g.strokeStyle = "#2b2b2b";
+    g.lineWidth = 3;
+    g.lineCap = "round";
+    g.beginPath();
+    g.arc(x, y + 4, r * 0.45, 0.15, Math.PI - 0.15);
+    g.stroke();
+    g.restore();
+  }
+
+  function drawCrayonTree(g, x, baseY, s, seed) {
+    roughPolygon(g, [
+      [x - 8 * s, baseY - 5 * s],
+      [x + 8 * s, baseY - 5 * s],
+      [x + 7 * s, baseY + 25 * s],
+      [x - 7 * s, baseY + 25 * s]
+    ], "#8b572a", "#6b3f20", seed + 1, "#6b3f20");
+
+    roughPolygon(g, [
+      [x, baseY - 112 * s],
+      [x - 37 * s, baseY - 55 * s],
+      [x + 37 * s, baseY - 55 * s]
+    ], "#249454", "#167640", seed + 2, "#19894a");
+
+    roughPolygon(g, [
+      [x, baseY - 88 * s],
+      [x - 46 * s, baseY - 28 * s],
+      [x + 46 * s, baseY - 28 * s]
+    ], "#2aa15a", "#177a43", seed + 3, "#1a8d4c");
+
+    roughPolygon(g, [
+      [x, baseY - 62 * s],
+      [x - 52 * s, baseY - 3 * s],
+      [x + 52 * s, baseY - 3 * s]
+    ], "#2fa75f", "#177a43", seed + 4, "#218f50");
+
+    var ornaments = [
+      [-19, -66, "#e73c32"],
+      [18, -53, "#2878cc"],
+      [-6, -37, "#f1c232"],
+      [27, -25, "#e73c32"],
+      [-28, -24, "#f6a62b"]
+    ];
+
+    for (var i = 0; i < ornaments.length; i++) {
+      roughCircle(
+        g,
+        x + ornaments[i][0] * s,
+        baseY + ornaments[i][1] * s,
+        5.5 * s,
+        ornaments[i][2],
+        ornaments[i][2],
+        seed + 20 + i
+      );
+    }
+
+    drawCrayonStarShape(g, x, baseY - 124 * s, 11 * s, "#ffd33d", seed + 40);
+  }
+
+  function drawCrayonHouse(g, x, baseY, s, bodyColor, roofColor, seed) {
+    var w = 118 * s;
+    var h = 86 * s;
+    var left = x - w / 2;
+    var top = baseY - h;
+
+    roughPolygon(g, [
+      [left, top],
+      [left + w, top],
+      [left + w, baseY],
+      [left, baseY]
+    ], bodyColor, roofColor, seed, bodyColor);
+
+    roughPolygon(g, [
+      [x, top - 54 * s],
+      [left - 14 * s, top + 8 * s],
+      [left + w + 14 * s, top + 8 * s]
+    ], roofColor, roofColor, seed + 10, roofColor);
+
+    roughLine(g, left - 4 * s, top + 3 * s, x, top - 47 * s, "#f7fbff", 8 * s, seed + 14, 3);
+    roughLine(g, x, top - 47 * s, left + w + 4 * s, top + 3 * s, "#f7fbff", 8 * s, seed + 15, 3);
+    roughLine(g, left - 4 * s, top + 6 * s, x, top - 44 * s, "#74b4e1", 2.1 * s, seed + 16, 2);
+    roughLine(g, x, top - 44 * s, left + w + 4 * s, top + 6 * s, "#74b4e1", 2.1 * s, seed + 17, 2);
+
+    roughPolygon(g, [
+      [x + 27 * s, top - 35 * s],
+      [x + 42 * s, top - 35 * s],
+      [x + 42 * s, top - 6 * s],
+      [x + 27 * s, top - 6 * s]
+    ], "#bd342f", "#92231f", seed + 18, "#a42522");
+
+    var sx = x + 35 * s;
+    var sy = top - 42 * s;
+    roughLine(g, sx, sy, sx - 8 * s, sy - 18 * s, "#777", 5 * s, seed + 19, 3);
+    roughLine(g, sx - 8 * s, sy - 18 * s, sx + 1 * s, sy - 35 * s, "#777", 5 * s, seed + 20, 3);
+    roughLine(g, sx + 1 * s, sy - 35 * s, sx - 6 * s, sy - 48 * s, "#777", 5 * s, seed + 21, 3);
+
+    roughPolygon(g, [
+      [x - 13 * s, baseY - 38 * s],
+      [x + 13 * s, baseY - 38 * s],
+      [x + 13 * s, baseY],
+      [x - 13 * s, baseY]
+    ], "#6f421f", "#553319", seed + 30, "#5d361a");
+
+    var wx = left + 29 * s;
+    var wy = top + 35 * s;
+    roughPolygon(g, [
+      [wx - 13 * s, wy - 12 * s],
+      [wx + 13 * s, wy - 12 * s],
+      [wx + 13 * s, wy + 12 * s],
+      [wx - 13 * s, wy + 12 * s]
+    ], "#62a9df", "#325b86", seed + 35, "#4e9ad3");
+
+    roughLine(g, wx, wy - 12 * s, wx, wy + 12 * s, "#69461f", 2.5 * s, seed + 36, 2);
+    roughLine(g, wx - 13 * s, wy, wx + 13 * s, wy, "#69461f", 2.5 * s, seed + 37, 2);
+  }
+
+  function drawCrayonPresent(g, x, y, s, seed) {
+    roughPolygon(g, [
+      [x - 30 * s, y - 34 * s],
+      [x + 30 * s, y - 34 * s],
+      [x + 30 * s, y + 24 * s],
+      [x - 30 * s, y + 24 * s]
+    ], "#2e9d58", "#1c7040", seed, "#248649");
+
+    roughLine(g, x, y - 34 * s, x, y + 24 * s, "#d93838", 9 * s, seed + 2, 3);
+    roughLine(g, x - 30 * s, y - 5 * s, x + 30 * s, y - 5 * s, "#d93838", 9 * s, seed + 3, 3);
+    roughLine(g, x, y - 34 * s, x - 18 * s, y - 53 * s, "#d93838", 5 * s, seed + 5, 3);
+    roughLine(g, x - 18 * s, y - 53 * s, x - 27 * s, y - 39 * s, "#d93838", 5 * s, seed + 6, 3);
+    roughLine(g, x, y - 34 * s, x + 18 * s, y - 53 * s, "#d93838", 5 * s, seed + 7, 3);
+    roughLine(g, x + 18 * s, y - 53 * s, x + 27 * s, y - 39 * s, "#d93838", 5 * s, seed + 8, 3);
+  }
+
+  function drawCrayonCandyCane(g, x, y, s) {
+    g.save();
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    g.strokeStyle = "#faf6e9";
+    g.lineWidth = 16 * s;
+    g.beginPath();
+    g.moveTo(x, y + 42 * s);
+    g.lineTo(x, y - 24 * s);
+    g.bezierCurveTo(x, y - 56 * s, x + 44 * s, y - 56 * s, x + 44 * s, y - 25 * s);
+    g.stroke();
+
+    g.strokeStyle = "#c92f35";
+    g.lineWidth = 5.5 * s;
+    g.setLineDash([12 * s, 12 * s]);
+    g.beginPath();
+    g.moveTo(x, y + 42 * s);
+    g.lineTo(x, y - 24 * s);
+    g.bezierCurveTo(x, y - 56 * s, x + 44 * s, y - 56 * s, x + 44 * s, y - 25 * s);
+    g.stroke();
+    g.setLineDash([]);
+    g.restore();
+  }
+
+  function buildCrayonBackground() {
+    var bg = document.createElement("canvas");
+    bg.width = W;
+    bg.height = H;
+    var g = bg.getContext("2d");
+
+    // Papel cálido de cuaderno.
+    g.fillStyle = "#fbf6e8";
+    g.fillRect(0, 0, W, H);
+
+    // Textura leve de papel.
+    for (var t = 0; t < 260; t++) {
+      var px = seededNoise(300 + t * 5.1) * W;
+      var py = seededNoise(700 + t * 7.7) * H;
+      var len = 2 + seededNoise(900 + t * 3.3) * 8;
+      g.strokeStyle = "rgba(120,100,75,.055)";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(px, py);
+      g.lineTo(px + len, py + (seededNoise(1100 + t) - 0.5) * 3);
+      g.stroke();
+    }
+
+    // Líneas azules y margen rojo de cuaderno.
+    for (var ly = 28; ly < H; ly += 31) {
+      roughLine(g, 0, ly, W, ly, "rgba(78,151,211,.28)", 1.5, 1200 + ly, 2);
+    }
+    roughLine(g, 43, 0, 43, H, "rgba(217,72,83,.34)", 2.2, 1300, 3);
+
+    // Nieve a los lados.
+    g.fillStyle = "rgba(246,252,255,.80)";
+    g.fillRect(0, H * 0.24, W, H * 0.76);
+
+    for (var s = 0; s < 64; s++) {
+      var sideLeft = s % 2 === 0;
+      var nx = sideLeft
+        ? seededNoise(1400 + s * 4.2) * W * 0.27
+        : W * 0.73 + seededNoise(1600 + s * 4.4) * W * 0.27;
+      var ny = H * 0.27 + seededNoise(1800 + s * 5.6) * H * 0.70;
+      var nlen = 14 + seededNoise(2000 + s * 2.7) * 42;
+      roughLine(g, nx, ny, nx + nlen, ny - 5, "rgba(62,149,214,.31)", 2.2, 2100 + s * 9, 2);
+    }
+
+    // Carretera vertical: más parecida a la referencia.
+    // Muy angosta en el horizonte y claramente abierta hacia abajo.
+    var roadTopY = ROAD_HORIZON_Y;
+    var road = [
+      [W / 2 - ROAD_TOP_HALF, roadTopY],
+      [W / 2 + ROAD_TOP_HALF, roadTopY],
+      [W / 2 + ROAD_BOTTOM_HALF, H],
+      [W / 2 - ROAD_BOTTOM_HALF, H]
+    ];
+
+    // Hombros claros de nieve a los lados.
+    var leftShoulder = [
+      [W / 2 - ROAD_TOP_HALF - 4, roadTopY],
+      [W / 2 - ROAD_TOP_HALF, roadTopY],
+      [W / 2 - ROAD_BOTTOM_HALF, H],
+      [W / 2 - ROAD_BOTTOM_HALF - 18, H]
+    ];
+    var rightShoulder = [
+      [W / 2 + ROAD_TOP_HALF, roadTopY],
+      [W / 2 + ROAD_TOP_HALF + 4, roadTopY],
+      [W / 2 + ROAD_BOTTOM_HALF + 18, H],
+      [W / 2 + ROAD_BOTTOM_HALF, H]
+    ];
+    roughPolygon(g, leftShoulder, "rgba(245,248,252,.95)", "rgba(222,231,239,.95)", 2260, "rgba(214,226,237,.9)");
+    roughPolygon(g, rightShoulder, "rgba(245,248,252,.95)", "rgba(222,231,239,.95)", 2270, "rgba(214,226,237,.9)");
+
+    // Asfalto con tono más profundo.
+    roughPolygon(g, road, "#666a70", "#50545a", 2300, "#4a4e53");
+
+    g.save();
+    polygonPath(g, road);
+    g.clip();
+
+    // Textura del asfalto.
+    for (var ry = roadTopY - 10; ry < H + 20; ry += 11) {
+      var rj = (seededNoise(2500 + ry) - 0.5) * 10;
+      g.strokeStyle = "rgba(45,48,52,.20)";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(W * 0.18, ry + rj);
+      g.lineTo(W * 0.82, ry - 4 + rj);
+      g.stroke();
+    }
+
+    // Bordes blancos irregulares.
+    roughLine(g, W / 2 - ROAD_TOP_HALF, roadTopY, W / 2 - ROAD_BOTTOM_HALF, H, "rgba(244,247,252,.96)", 4.5, 2321, 2);
+    roughLine(g, W / 2 + ROAD_TOP_HALF, roadTopY, W / 2 + ROAD_BOTTOM_HALF, H, "rgba(244,247,252,.96)", 4.5, 2322, 2);
+
+    // Línea amarilla central con crecimiento en grosor y longitud.
+    var dashY = roadTopY + H * 0.015;
+    var dashIndex = 0;
+    while (dashY < H) {
+      var dt = clamp((dashY - roadTopY) / (H - roadTopY), 0, 1);
+      var dashLen = 7 + dt * 58;
+      roughLine(
+        g,
+        W / 2 + (seededNoise(2750 + dashIndex) - 0.5) * (1.5 + dt * 4),
+        dashY,
+        W / 2 + (seededNoise(2800 + dashIndex) - 0.5) * (1.5 + dt * 4),
+        Math.min(H, dashY + dashLen),
+        "#f0c838",
+        2.8 + dt * 7.8,
+        2850 + dashIndex * 13,
+        3
+      );
+      dashY += dashLen + 16 + 42 * dt;
+      dashIndex++;
+    }
+
+    // Textura longitudinal sutil.
+    for (var stripe = 0; stripe < 22; stripe++) {
+      var sy = roadTopY + stripe * ((H - roadTopY) / 22);
+      var st = clamp((sy - roadTopY) / (H - roadTopY), 0, 1);
+      var leftEdge = W / 2 - (ROAD_TOP_HALF + (ROAD_BOTTOM_HALF - ROAD_TOP_HALF) * Math.pow(st, 1.12));
+      var rightEdge = W / 2 + (ROAD_TOP_HALF + (ROAD_BOTTOM_HALF - ROAD_TOP_HALF) * Math.pow(st, 1.12));
+      var x1 = leftEdge + (rightEdge - leftEdge) * (0.12 + seededNoise(2360 + stripe) * 0.76);
+      roughLine(
+        g,
+        x1,
+        sy,
+        x1 + (seededNoise(2370 + stripe) - 0.5) * 16,
+        Math.min(H, sy + 26 + st * 38),
+        "rgba(255,255,255,.08)",
+        1.4 + st * 1.8,
+        2380 + stripe * 7,
+        2
+      );
+    }
+    g.restore();
+
+    // Cielo infantil.
+    drawCrayonSun(g, 70, 74, 28);
+    drawCrayonCloud(g, 275, 72, 0.58, 3000);
+    drawCrayonCloud(g, 446, 145, 0.46, 3100);
+
+    var flakes = [
+      [155, 55, 11], [355, 112, 12], [500, 62, 9],
+      [92, 185, 11], [450, 225, 12], [62, 320, 9],
+      [492, 365, 10], [82, 535, 9], [468, 575, 10]
+    ];
+
+    for (var f = 0; f < flakes.length; f++) {
+      drawCrayonSnowflake(g, flakes[f][0], flakes[f][1], flakes[f][2], 3200 + f * 17);
+    }
+
+    // Decoración navideña adaptada al formato vertical y fuera de la carretera.
+    drawCrayonHouse(g, 82, 300, 0.54, "#df3a32", "#cf312d", 3400);
+    drawCrayonHouse(g, 462, 332, 0.52, "#f2ca34", "#dc3a32", 3600);
+
+    drawCrayonTree(g, 62, 465, 0.50, 3500);
+    drawCrayonTree(g, 485, 500, 0.48, 3700);
+    drawCrayonTree(g, 55, 645, 0.38, 3750);
+    drawCrayonTree(g, 492, 690, 0.36, 3770);
+
+    drawCrayonPresent(g, 40, 805, 0.46, 3800);
+    drawCrayonCandyCane(g, 505, 820, 0.52);
+
+    crayonBackgroundCanvas = bg;
+  }
+
+  function drawBackground() {
+    if (backgroundReady) {
+      ctx.drawImage(backgroundImage, 0, 0, W, H);
+    } else {
+      if (!crayonBackgroundCanvas) buildCrayonBackground();
+      ctx.drawImage(crayonBackgroundCanvas, 0, 0);
+    }
+
+    for (var i = 0; i < state.snow.length; i++) {
+      var flake = state.snow[i];
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,.55)";
+      ctx.lineWidth = Math.max(1, flake.r * 0.65);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(flake.x - flake.r * 1.8, flake.y);
+      ctx.lineTo(flake.x + flake.r * 1.8, flake.y);
+      ctx.moveTo(flake.x, flake.y - flake.r * 1.8);
+      ctx.lineTo(flake.x, flake.y + flake.r * 1.8);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // La carretera ya forma parte de fondo.png.
+  function drawRoad() {
+    return;
+  }
+
+  function drawPlayer() {
+    var p = state.player;
+
+    var frame = 0;
+    if (state.running && !state.gameOver) {
+      frame =
+        Math.floor(performance.now() / CHARACTER_FRAME_MS) %
+        CHARACTER_FRAME_COUNT;
+    }
+
+    var currentCharacter = characterFrames[frame];
+    var characterHeight = 145;
+
+    if (
+      currentCharacter &&
+      currentCharacter.complete &&
+      currentCharacter.naturalWidth
+    ) {
+      drawImageCenteredByHeight(
+        currentCharacter,
+        p.x,
+        p.y - 3,
+        characterHeight
+      );
+      return;
+    }
+
+    ctx.fillStyle = "#ffbf18";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 27, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSnowman(obstacle) {
+    var x = obstacle.x;
+    var y = obstacle.y;
+    var scale = obstacleScaleAt(y);
+
+    ctx.save();
+    ctx.globalAlpha = 0.08 + roadDepth(y) * 0.15;
+    ctx.fillStyle = "#18202a";
+    ctx.beginPath();
+    ctx.ellipse(
+      x,
+      y + 38 * scale,
+      38 * scale,
+      9 * scale,
+      0,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+    ctx.restore();
+
+    if (snowmanReady) {
+      drawImageCenteredByHeight(
+        snowmanImage,
+        x,
+        y - 7 * scale,
+        150 * scale
+      );
+      return;
+    }
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(0, 18, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, -17, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStar(reward) {
+    var scale = rewardScaleAt(reward.y);
+    var rotation = reward.spin + performance.now() / 700;
+    var pulse = 1 + Math.sin(performance.now() / 170) * 0.07;
+
+    ctx.save();
+    ctx.translate(reward.x, reward.y);
+    ctx.rotate(rotation);
+    ctx.scale(pulse, pulse);
+
+    if (starReady && starImage.naturalWidth) {
+      var starSize = 46 * scale;
+      ctx.drawImage(
+        starImage,
+        -starSize / 2,
+        -starSize / 2,
+        starSize,
+        starSize
+      );
+      ctx.restore();
+      return;
+    }
+
+    var outer = 18 * scale;
+    var inner = outer * 0.46;
+
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var radius = i % 2 === 0 ? outer : inner;
+      var angle = -Math.PI / 2 + i * Math.PI / 5;
+      var px = Math.cos(angle) * radius;
+      var py = Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = "#ffd43b";
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawRewardPopups() {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.font = "bold 28px Arial";
+
+    for (var i = 0; i < state.rewardPopups.length; i++) {
+      var popup = state.rewardPopups[i];
+      ctx.globalAlpha = clamp(popup.life / 0.70, 0, 1);
+      ctx.fillStyle = "#f2a900";
+      ctx.fillText("+3", popup.x, popup.y);
+    }
+
+    ctx.restore();
+  }
+
+  function updateGame(deltaTime) {
+    if (!state.running || state.gameOver) return;
+
+    // Aceleración gradual y estable en cualquier dispositivo.
+    if (state.speed < state.targetSpeed) {
+      state.speed = Math.min(
+        state.targetSpeed,
+        state.speed + SPEED_ACCELERATION * deltaTime
+      );
+    } else if (state.speed > state.targetSpeed) {
+      state.speed = Math.max(
+        state.targetSpeed,
+        state.speed - SPEED_ACCELERATION * deltaTime
+      );
+    }
+
+    var playerHalfRange = roadHalfWidthAt(state.player.y) * 0.78;
+    state.player.x = clamp(
+      state.player.x,
+      W / 2 - playerHalfRange,
+      W / 2 + playerHalfRange
+    );
+
+    // Las estrellas ahora aparecen mezcladas con los muñecos.
+    // Su única regla especial es que el carril de la estrella queda reservado:
+    // no puede tener un muñeco cuando nace y tampoco se generan nuevos
+    // muñecos en ese carril mientras la estrella siga visible.
+    if (!state.rewardPending && state.rewards.length === 0) {
+      state.rewardCounter += deltaTime;
+      if (state.rewardCounter >= state.rewardEvery) {
+        state.rewardPending = true;
+      }
+    }
+
+    // Cuando toca una estrella intentamos colocarla en uno de los carriles libres.
+    // Si los cinco están ocupados, esperamos a que se libere uno, pero dejamos
+    // los muñecos que ya están en pantalla para que la estrella aparezca entre ellos.
+    if (state.rewardPending && state.rewards.length === 0) {
+      if (spawnReward()) {
+        state.rewardPending = false;
+        state.rewardCounter = 0;
+        state.rewardEvery = randomRewardDelay();
+      }
+    }
+
+    // Los muñecos siguen apareciendo aunque haya una estrella; simplemente
+    // respetan el carril reservado de esa estrella. Si estamos esperando una
+    // estrella y todavía no hay carril libre, no añadimos más muñecos hasta
+    // que se abra un espacio.
+    if (!state.rewardPending) {
+      state.spawnCounter += deltaTime;
+      if (state.spawnCounter >= state.nextSpawn) {
+        spawnObstacle();
+        state.spawnCounter = 0;
+        state.nextSpawn = randomSpawnDelay();
+      }
+    }
+
+    for (var i = 0; i < state.obstacles.length; i++) {
+      var movingObstacle = state.obstacles[i];
+      movingObstacle.y += state.speed * perspectiveMotionAt(movingObstacle.y) * deltaTime;
+      movingObstacle.x = xForLane(movingObstacle.lane, movingObstacle.y);
+    }
+
+    for (var j = state.obstacles.length - 1; j >= 0; j--) {
+      var obstacle = state.obstacles[j];
+
+      if (obstacle.y > H + 80) {
+        state.obstacles.splice(j, 1);
+        addScore(1);
+        continue;
+      }
+
+      var obstacleScale = obstacleScaleAt(obstacle.y);
+      var collision =
+        state.player.x - 22 < obstacle.x + 42 * obstacleScale &&
+        state.player.x + 22 > obstacle.x - 42 * obstacleScale &&
+        state.player.y - 50 < obstacle.y + 68 * obstacleScale &&
+        state.player.y + 55 > obstacle.y - 82 * obstacleScale;
+
+      if (collision) {
+        state.gameOver = true;
+        state.running = false;
+        gameStatusEl.textContent = "¡Choque!";
+      }
+    }
+
+    for (var r = 0; r < state.rewards.length; r++) {
+      var movingReward = state.rewards[r];
+      movingReward.y += state.speed * perspectiveMotionAt(movingReward.y) * deltaTime;
+      movingReward.x = xForLane(movingReward.lane, movingReward.y);
+    }
+
+    for (var q = state.rewards.length - 1; q >= 0; q--) {
+      var reward = state.rewards[q];
+
+      if (reward.y > H + 60) {
+        state.rewards.splice(q, 1);
+        continue;
+      }
+
+      var rewardHitSize = 18 * rewardScaleAt(reward.y);
+      var rewardCollision =
+        state.player.x - 24 < reward.x + rewardHitSize &&
+        state.player.x + 24 > reward.x - rewardHitSize &&
+        state.player.y - 52 < reward.y + rewardHitSize &&
+        state.player.y + 55 > reward.y - rewardHitSize;
+
+      if (rewardCollision) {
+        state.rewardPopups.push({
+          x: reward.x,
+          y: reward.y - 12,
+          life: 0.70
+        });
+        state.rewards.splice(q, 1);
+        addScore(3);
+      }
+    }
+
+    for (var p = state.rewardPopups.length - 1; p >= 0; p--) {
+      state.rewardPopups[p].life -= deltaTime;
+      state.rewardPopups[p].y -= 48 * deltaTime;
+      if (state.rewardPopups[p].life <= 0) {
+        state.rewardPopups.splice(p, 1);
+      }
+    }
+
+    for (var k = 0; k < state.snow.length; k++) {
+      var snowflake = state.snow[k];
+      snowflake.y += snowflake.s * 60 * deltaTime;
+      if (snowflake.y > H) {
+        snowflake.y = -5;
+        snowflake.x = Math.random() * W;
+      }
+    }
+  }
+
+  function drawGameOver() {
+    if (!state.gameOver) return;
+
+    ctx.fillStyle = "rgba(255,253,242,.84)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#d9485f";
+    ctx.font = "bold 54px Arial";
+    ctx.fillText("¡CHOQUE!", W / 2, H / 2 - 8);
+    ctx.fillStyle = "#333";
+    ctx.font = "25px Arial";
+    ctx.fillText("Pulsa Empezar juego", W / 2, H / 2 + 38);
+  }
+
+  function onFaceResults(results) {
+    if (
+      !results ||
+      !results.multiFaceLandmarks ||
+      results.multiFaceLandmarks.length === 0
+    ) {
+      cameraStatusEl.textContent = "No veo rostro";
+      return;
+    }
+
+    var landmarks = results.multiFaceLandmarks[0];
+    var nose = landmarks[1];
+    var mirroredX = 1 - nose.x;
+
+    lastMirroredFaceX = mirroredX;
+
+    // La primera posición detectada se toma automáticamente como centro.
+    if (!autoCalibrated) {
+      calibratedCenter = mirroredX;
+      smoothFaceX = mirroredX;
+      autoCalibrated = true;
+    }
+
+    smoothFaceX += (mirroredX - smoothFaceX) * 0.18;
+
+    var offset = smoothFaceX - calibratedCenter;
+    var normalized = clamp(0.5 + offset * 3.2, 0, 1);
+
+    // En vertical el movimiento se adapta al ancho real de la carretera
+    // justo donde está Pollito.
+    var playerHalfRange = roadHalfWidthAt(state.player.y) * 0.78;
+    state.player.x = W / 2 + (normalized * 2 - 1) * playerHalfRange;
+    cameraStatusEl.textContent = "Rostro detectado";
+  }
+
+  function initializeFaceDetector() {
+    return new Promise(function (resolve, reject) {
+      try {
+        if (typeof window.FaceMesh === "undefined") {
+          reject(new Error("El script clásico de MediaPipe no cargó."));
+          return;
+        }
+
+        faceMesh = new window.FaceMesh({
+          locateFile: function (file) {
+            return "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/" + file;
+          }
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onFaceResults);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async function detectorLoop() {
+    if (
+      trackingEnabled &&
+      faceMesh &&
+      video.readyState >= 2 &&
+      !processingFrame
+    ) {
+      processingFrame = true;
+      try {
+        await faceMesh.send({ image: video });
+      } catch (error) {
+        console.warn("Error procesando fotograma:", error);
+      } finally {
+        processingFrame = false;
+      }
+    }
+
+    requestAnimationFrame(detectorLoop);
+  }
+
+  async function activateCamera() {
+    var button = document.getElementById("startGameButton");
+    button.disabled = true;
+
+    try {
+      if (!window.isSecureContext) {
+        throw new Error("La página no está usando HTTPS.");
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("El navegador no permite usar la cámara.");
+      }
+
+      cameraStatusEl.textContent = "Pidiendo permiso";
+      cameraMessageEl.textContent =
+        "Safari debería mostrar el permiso de cámara ahora.";
+
+      // Primero pedimos la cámara. No esperamos a MediaPipe.
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: "user",
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
+      });
+
+      video.srcObject = cameraStream;
+      await video.play();
+
+      cameraPanel.style.display = "none";
+      cameraStatusEl.textContent = "Encendida";
+      cameraStatusEl.textContent = "Cargando detector";
+
+      startGame();
+
+      try {
+        await initializeFaceDetector();
+        trackingEnabled = true;
+        cameraStatusEl.textContent = "Buscando rostro";
+        cameraStatusEl.textContent = "Buscando rostro";
+
+        if (!detectorLoopStarted) {
+          detectorLoopStarted = true;
+          requestAnimationFrame(detectorLoop);
+        }
+
+        button.disabled = false;
+      } catch (detectorError) {
+        console.error(detectorError);
+        cameraStatusEl.textContent = "Solo cámara";
+        cameraMessageEl.textContent =
+          "La cámara funciona, pero el detector facial no pudo cargarse.";
+        button.disabled = false;
+      }
+    } catch (error) {
+      console.error(error);
+      cameraStatusEl.textContent = "Bloqueada";
+      cameraMessageEl.textContent =
+        "No se pudo abrir la cámara: " +
+        (error.name ? error.name + " — " : "") +
+        error.message;
+      cameraMessageEl.textContent +=
+        " Revisa el permiso de cámara del sitio y vuelve a intentarlo.";
+      button.disabled = false;
+    }
+  }
+
+  document.getElementById("startGameButton").addEventListener("click", async function () {
+    if (!cameraStream) {
+      await activateCamera();
+      return;
+    }
+
+    resetGame();
+    startGame();
+  });
+
+  var lastFrameTime = performance.now();
+
+  function frame(now) {
+    // deltaTime = segundos reales desde el fotograma anterior.
+    // Limitamos pausas largas para evitar que los objetos "salten" al volver.
+    var deltaTime = Math.min((now - lastFrameTime) / 1000, 0.10);
+    if (!isFinite(deltaTime) || deltaTime < 0) deltaTime = 0;
+    lastFrameTime = now;
+
+    updateGame(deltaTime);
+    drawBackground();
+    drawRoad();
+
+    for (var i = 0; i < state.obstacles.length; i++) {
+      drawSnowman(state.obstacles[i]);
+    }
+
+    for (var r = 0; r < state.rewards.length; r++) {
+      drawStar(state.rewards[r]);
+    }
+
+    drawPlayer();
+    drawRewardPopups();
+    drawGameOver();
+    requestAnimationFrame(frame);
+  }
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
