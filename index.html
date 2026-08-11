@@ -971,7 +971,7 @@ button:disabled { opacity: .55; }
     }
 
     var currentCharacter = characterFrames[frame];
-    var characterHeight = 145;
+    var characterHeight = 182;
 
     if (
       currentCharacter &&
@@ -981,7 +981,7 @@ button:disabled { opacity: .55; }
       drawImageCenteredByHeight(
         currentCharacter,
         p.x,
-        p.y - 3,
+        p.y + 4,
         characterHeight
       );
       return;
@@ -1181,10 +1181,10 @@ button:disabled { opacity: .55; }
 
       var rewardHitSize = 18 * rewardScaleAt(reward.y);
       var rewardCollision =
-        state.player.x - 24 < reward.x + rewardHitSize &&
-        state.player.x + 24 > reward.x - rewardHitSize &&
-        state.player.y - 52 < reward.y + rewardHitSize &&
-        state.player.y + 55 > reward.y - rewardHitSize;
+        state.player.x - 28 < reward.x + rewardHitSize &&
+        state.player.x + 28 > reward.x - rewardHitSize &&
+        state.player.y - 58 < reward.y + rewardHitSize &&
+        state.player.y + 64 > reward.y - rewardHitSize;
 
       if (rewardCollision) {
         state.rewardPopups.push({
