@@ -322,8 +322,8 @@ button:disabled { opacity: .55; }
   }
 
   function obstacleScaleAt(y) {
-    // Pequeño en el horizonte; cerca del tamaño del personaje al acercarse.
-    return 0.23 + roadDepth(y) * 0.74;
+    // Pequeño en el horizonte; un poco más grande que el personaje al acercarse.
+    return 0.26 + roadDepth(y) * 0.90;
   }
 
   function rewardScaleAt(y) {
