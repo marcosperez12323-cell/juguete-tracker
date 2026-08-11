@@ -226,9 +226,9 @@ button:disabled { opacity: .55; }
   var starReady = false;
   starImage.onload = function () { starReady = true; };
   starImage.onerror = function () {
-    console.warn("No se pudo cargar images/estrella.png.");
+    console.warn("No se pudo cargar images/pieza_pollo.png.");
   };
-  starImage.src = "images/estrella.png";
+  starImage.src = "images/pieza_pollo.png";
 
   function drawImageCenteredByHeight(image, x, y, targetHeight) {
     if (!image || !image.complete || !image.naturalWidth || !image.naturalHeight) {
@@ -414,7 +414,7 @@ button:disabled { opacity: .55; }
 
     var laneJitter = (Math.random() - 0.5) * 0.08;
     var lane = clamp(laneValues[laneIndex] + laneJitter, -0.95, 0.95);
-    var y = ROAD_HORIZON_Y + 4;
+    var y = ROAD_HORIZON_Y + 34;
 
     state.obstacles.push({
       laneIndex: laneIndex,
@@ -996,22 +996,6 @@ button:disabled { opacity: .55; }
     var x = obstacle.x;
     var y = obstacle.y;
     var scale = obstacleScaleAt(y);
-
-    ctx.save();
-    ctx.globalAlpha = 0.08 + roadDepth(y) * 0.15;
-    ctx.fillStyle = "#18202a";
-    ctx.beginPath();
-    ctx.ellipse(
-      x,
-      y + 38 * scale,
-      28 * scale,
-      7 * scale,
-      0,
-      0,
-      Math.PI * 2
-    );
-    ctx.fill();
-    ctx.restore();
 
     if (snowmanReady) {
       drawImageCenteredByHeight(
