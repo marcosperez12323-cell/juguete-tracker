@@ -203,6 +203,9 @@ button:disabled { opacity: .55; }
     <!-- Cámara frontal, oculta visualmente. -->
     <video id="camera" autoplay playsinline muted></video>
 
+    <!-- Música del juego -->
+    <audio id="gameMusic" src="audio/musica.mp3" preload="auto" loop></audio>
+
     <div id="cameraPanel">
       <div>
         <h2>Control con la cabeza</h2>
@@ -227,6 +230,10 @@ button:disabled { opacity: .55; }
   var introVideo = document.getElementById("introVideo");
   var introCameraButton = document.getElementById("introCameraButton");
   var restartControls = document.getElementById("restartControls");
+  var gameMusic = document.getElementById("gameMusic");
+
+  // Volumen de la música: 0 = silencio, 1 = máximo.
+  gameMusic.volume = 0.45;
 
   var scoreEl = document.getElementById("score");
   var cameraStatusEl = document.getElementById("cameraStatus");
@@ -1433,6 +1440,15 @@ button:disabled { opacity: .55; }
     }
   }
 
+  async function startGameMusic() {
+    try {
+      gameMusic.loop = true;
+      await gameMusic.play();
+    } catch (error) {
+      console.warn("No se pudo iniciar la música inmediatamente.", error);
+    }
+  }
+
   async function activateCamera() {
     var button = introCameraButton;
     button.disabled = true;
@@ -1512,14 +1528,17 @@ button:disabled { opacity: .55; }
   introCameraButton.addEventListener("click", async function () {
     if (introCameraButton.disabled || introFinished) return;
 
-    // IMPORTANTE:
-    // getUserMedia se ejecuta desde este toque real del usuario.
+    // La música comienza desde el toque real del usuario.
+    await startGameMusic();
+
+    // getUserMedia también se ejecuta desde este toque real del usuario.
     await activateCamera();
   });
 
-  document.getElementById("startGameButton").addEventListener("click", function () {
+  document.getElementById("startGameButton").addEventListener("click", async function () {
     if (!cameraStream) return;
 
+    await startGameMusic();
     restartControls.style.display = "none";
     resetGame();
     startGame();
