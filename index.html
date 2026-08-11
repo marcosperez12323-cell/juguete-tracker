@@ -141,6 +141,7 @@ button:disabled { opacity: .55; }
       <div class="card status-hidden" aria-hidden="true"><small>Juego</small><strong id="gameStatus">Listo</strong></div>
     </section>
     <canvas id="game" width="540" height="960"></canvas>
+    <video id="backgroundVideo" muted loop playsinline preload="auto" style="display:none;"></video>
     <video id="camera" autoplay playsinline muted></video>
 
     <div id="cameraPanel">
@@ -187,13 +188,20 @@ button:disabled { opacity: .55; }
   // Personaje incrustado directamente en este archivo.
   // No requiere subir pollito.png ni crear una carpeta de imágenes.
   // IMÁGENES DEL JUEGO
-  var backgroundImage = new Image();
+  var backgroundVideo = document.getElementById("backgroundVideo");
   var backgroundReady = false;
-  backgroundImage.onload = function () { backgroundReady = true; };
-  backgroundImage.onerror = function () {
-    console.warn("No se pudo cargar images/fondo.png.");
-  };
-  backgroundImage.src = "images/fondo.png";
+  backgroundVideo.src = "videos/fondo.mp4";
+  backgroundVideo.muted = true;
+  backgroundVideo.loop = true;
+  backgroundVideo.playsInline = true;
+
+  backgroundVideo.addEventListener("loadeddata", function () {
+    backgroundReady = true;
+  });
+
+  backgroundVideo.addEventListener("error", function () {
+    console.warn("No se pudo cargar videos/fondo.mp4.");
+  });
 
   var characterFrames = [];
   var CHARACTER_FRAME_COUNT = 6;
@@ -923,8 +931,8 @@ button:disabled { opacity: .55; }
   }
 
   function drawBackground() {
-    if (backgroundReady) {
-      ctx.drawImage(backgroundImage, 0, 0, W, H);
+    if (backgroundReady && backgroundVideo.readyState >= 2) {
+      ctx.drawImage(backgroundVideo, 0, 0, W, H);
     } else {
       if (!crayonBackgroundCanvas) buildCrayonBackground();
       ctx.drawImage(crayonBackgroundCanvas, 0, 0);
@@ -946,7 +954,7 @@ button:disabled { opacity: .55; }
     }
   }
 
-  // La carretera ya forma parte de fondo.png.
+  // La carretera ya forma parte del video de fondo.
   function drawRoad() {
     return;
   }
@@ -996,8 +1004,8 @@ button:disabled { opacity: .55; }
     ctx.ellipse(
       x,
       y + 38 * scale,
-      38 * scale,
-      9 * scale,
+      28 * scale,
+      7 * scale,
       0,
       0,
       Math.PI * 2
@@ -1010,7 +1018,7 @@ button:disabled { opacity: .55; }
         snowmanImage,
         x,
         y - 7 * scale,
-        150 * scale
+        105 * scale
       );
       return;
     }
@@ -1160,10 +1168,10 @@ button:disabled { opacity: .55; }
 
       var obstacleScale = obstacleScaleAt(obstacle.y);
       var collision =
-        state.player.x - 22 < obstacle.x + 42 * obstacleScale &&
-        state.player.x + 22 > obstacle.x - 42 * obstacleScale &&
-        state.player.y - 50 < obstacle.y + 68 * obstacleScale &&
-        state.player.y + 55 > obstacle.y - 82 * obstacleScale;
+        state.player.x - 22 < obstacle.x + 30 * obstacleScale &&
+        state.player.x + 22 > obstacle.x - 30 * obstacleScale &&
+        state.player.y - 50 < obstacle.y + 48 * obstacleScale &&
+        state.player.y + 55 > obstacle.y - 62 * obstacleScale;
 
       if (collision) {
         state.gameOver = true;
@@ -1320,6 +1328,14 @@ button:disabled { opacity: .55; }
     requestAnimationFrame(detectorLoop);
   }
 
+  async function startBackgroundVideo() {
+    try {
+      await backgroundVideo.play();
+    } catch (error) {
+      console.warn("No se pudo iniciar el video de fondo inmediatamente.", error);
+    }
+  }
+
   async function activateCamera() {
     var button = document.getElementById("startGameButton");
     button.disabled = true;
@@ -1349,6 +1365,7 @@ button:disabled { opacity: .55; }
 
       video.srcObject = cameraStream;
       await video.play();
+      await startBackgroundVideo();
 
       cameraPanel.style.display = "none";
       cameraStatusEl.textContent = "Encendida";
@@ -1389,6 +1406,8 @@ button:disabled { opacity: .55; }
   }
 
   document.getElementById("startGameButton").addEventListener("click", async function () {
+    await startBackgroundVideo();
+
     if (!cameraStream) {
       await activateCamera();
       return;
