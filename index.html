@@ -264,20 +264,17 @@ button:disabled { opacity: .55; }
   window.addEventListener("pageshow", tryAutoplayMusic);
   gameMusic.addEventListener("canplay", tryAutoplayMusic);
 
-  // Si el navegador bloquea el autoplay con sonido, cualquier primer toque
-  // durante la introducción desbloquea SOLO la música.
-  // No activa la cámara y no depende del botón del segundo 11.
-  function unlockMusicAnywhere() {
+  // Si el navegador bloqueó el autoplay, el primer toque lo desbloquea.
+  function unlockMusic() {
     tryAutoplayMusic();
-
-    document.removeEventListener("pointerdown", unlockMusicAnywhere, true);
-    document.removeEventListener("touchstart", unlockMusicAnywhere, true);
-    document.removeEventListener("click", unlockMusicAnywhere, true);
+    document.removeEventListener("pointerdown", unlockMusic);
+    document.removeEventListener("touchstart", unlockMusic);
+    document.removeEventListener("click", unlockMusic);
   }
 
-  document.addEventListener("pointerdown", unlockMusicAnywhere, true);
-  document.addEventListener("touchstart", unlockMusicAnywhere, true);
-  document.addEventListener("click", unlockMusicAnywhere, true);
+  document.addEventListener("pointerdown", unlockMusic, { once: true });
+  document.addEventListener("touchstart", unlockMusic, { once: true });
+  document.addEventListener("click", unlockMusic, { once: true });
 
   var scoreEl = document.getElementById("score");
   var cameraStatusEl = document.getElementById("cameraStatus");
@@ -289,9 +286,6 @@ button:disabled { opacity: .55; }
   var H = canvas.height;
 
   var cameraStream = null;
-
-  introVideo.muted = true;
-  backgroundVideo.muted = true;
 
   var INTRO_BUTTON_TIME = 11;
   var introFinished = false;
