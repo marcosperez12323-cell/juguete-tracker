@@ -204,7 +204,7 @@ button:disabled { opacity: .55; }
     <video id="camera" autoplay playsinline muted></video>
 
     <!-- Música del juego -->
-    <audio id="gameMusic" src="audio/musica.mp3" preload="auto" loop></audio>
+    <audio id="gameMusic" src="audio/musica.mp3" preload="auto" autoplay loop></audio>
 
     <div id="cameraPanel">
       <div>
@@ -234,6 +234,26 @@ button:disabled { opacity: .55; }
 
   // Volumen de la música: 0 = silencio, 1 = máximo.
   gameMusic.volume = 0.45;
+  gameMusic.loop = true;
+
+  // Intentar reproducir la música desde que carga la página.
+  function tryAutoplayMusic() {
+    var promise = gameMusic.play();
+    if (promise && typeof promise.catch === "function") {
+      promise.catch(function () {
+        // Algunos navegadores móviles bloquean audio automático.
+        // En ese caso se iniciará con el primer toque del usuario.
+      });
+    }
+  }
+
+  window.addEventListener("load", tryAutoplayMusic);
+
+  // Respaldo para móviles que bloquean autoplay con sonido.
+  document.addEventListener("pointerdown", function startMusicOnFirstTouch() {
+    tryAutoplayMusic();
+    document.removeEventListener("pointerdown", startMusicOnFirstTouch);
+  }, { once: true });
 
   var scoreEl = document.getElementById("score");
   var cameraStatusEl = document.getElementById("cameraStatus");
@@ -1528,10 +1548,11 @@ button:disabled { opacity: .55; }
   introCameraButton.addEventListener("click", async function () {
     if (introCameraButton.disabled || introFinished) return;
 
-    // La música comienza desde el toque real del usuario.
+    // La música ya debe estar sonando; este toque sirve además como
+    // respaldo en móviles que hayan bloqueado el autoplay.
     await startGameMusic();
 
-    // getUserMedia también se ejecuta desde este toque real del usuario.
+    // getUserMedia se ejecuta desde este toque real del usuario.
     await activateCamera();
   });
 
