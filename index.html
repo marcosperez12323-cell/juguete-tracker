@@ -61,7 +61,7 @@
       touch-action: none;
     }
     /* La cámara sigue funcionando, pero su vista previa queda fuera de pantalla. */
-    video {
+    #camera {
       position: absolute;
       left: -9999px;
       top: -9999px;
@@ -69,6 +69,43 @@
       height: 1px;
       opacity: 0;
       pointer-events: none;
+    }
+
+    /* Video de introducción, encima del juego. */
+    #introVideo {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    /*
+      Botón invisible sobre "ACTIVA TU CÁMARA".
+      Las medidas salen de la imagen de referencia adjunta.
+    */
+    #introCameraButton {
+      position: absolute;
+      z-index: 6;
+      left: 15.4%;
+      top: 22.1%;
+      width: 69.6%;
+      height: 7.5%;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      opacity: 0;
+      pointer-events: none;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    #introCameraButton.ready {
+      pointer-events: auto;
     }
     .controls {
       display: grid;
@@ -141,20 +178,42 @@ button:disabled { opacity: .55; }
       <div class="card status-hidden" aria-hidden="true"><small>Juego</small><strong id="gameStatus">Listo</strong></div>
     </section>
     <canvas id="game" width="540" height="960"></canvas>
+
+    <!-- VIDEO DE INTRODUCCIÓN -->
+    <video
+      id="introVideo"
+      src="videos/intro.mp4"
+      autoplay
+      muted
+      playsinline
+      preload="auto">
+    </video>
+
+    <!-- Se activa a partir del segundo 11. -->
+    <button
+      id="introCameraButton"
+      type="button"
+      aria-label="Activar cámara y comenzar juego"
+      disabled>
+    </button>
+
+    <!-- Video que ya usa el juego como fondo. -->
     <video id="backgroundVideo" muted loop playsinline preload="auto" style="display:none;"></video>
+
+    <!-- Cámara frontal, oculta visualmente. -->
     <video id="camera" autoplay playsinline muted></video>
 
     <div id="cameraPanel">
       <div>
         <h2>Control con la cabeza</h2>
-        <p>Colócate frente a la cámara y presiona “Empezar juego”. Esquiva los muñecos y recoge estrellas para ganar +3.</p>
+        <p>Colócate frente a la cámara y presiona “Empezar juego”. Esquiva los muñecos y recoge piezas de pollo para ganar +3.</p>
         <p id="cameraMessage"></p>
       </div>
     </div>
   </section>
 
-  <section class="controls single-control">
-    <button id="startGameButton" class="green">Empezar juego</button>
+  <section class="controls single-control" id="restartControls" style="display:none;">
+    <button id="startGameButton" class="green">Jugar de nuevo</button>
   </section>
 </main>
 
@@ -165,6 +224,9 @@ button:disabled { opacity: .55; }
   var canvas = document.getElementById("game");
   var ctx = canvas.getContext("2d");
   var video = document.getElementById("camera");
+  var introVideo = document.getElementById("introVideo");
+  var introCameraButton = document.getElementById("introCameraButton");
+  var restartControls = document.getElementById("restartControls");
 
   var scoreEl = document.getElementById("score");
   var cameraStatusEl = document.getElementById("cameraStatus");
@@ -176,6 +238,53 @@ button:disabled { opacity: .55; }
   var H = canvas.height;
 
   var cameraStream = null;
+
+  var INTRO_BUTTON_TIME = 11;
+  var introFinished = false;
+
+  // La intro se reproduce una sola vez.
+  introVideo.loop = false;
+
+  function updateIntroCameraButton() {
+    if (introFinished) return;
+
+    var active =
+      introVideo.readyState >= 1 &&
+      introVideo.currentTime >= INTRO_BUTTON_TIME;
+
+    introCameraButton.disabled = !active;
+    introCameraButton.classList.toggle("ready", active);
+  }
+
+  introVideo.addEventListener("timeupdate", updateIntroCameraButton);
+  introVideo.addEventListener("seeking", updateIntroCameraButton);
+  introVideo.addEventListener("loadedmetadata", function () {
+    updateIntroCameraButton();
+
+    // Intentar reproducir automáticamente. Está silenciado para permitir autoplay móvil.
+    var playPromise = introVideo.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(function (error) {
+        console.warn("El video de introducción espera interacción del usuario.", error);
+      });
+    }
+  });
+
+  // La intro NO hace loop.
+  // Cuando termina, queda congelada visualmente en su último fotograma.
+  introVideo.addEventListener("ended", function () {
+    try {
+      if (isFinite(introVideo.duration) && introVideo.duration > 0.05) {
+        introVideo.currentTime = Math.max(0, introVideo.duration - 0.04);
+      }
+    } catch (error) {
+      console.warn("No se pudo fijar el último fotograma de la intro.", error);
+    }
+
+    introVideo.pause();
+    updateIntroCameraButton();
+  });
+
   var faceMesh = null;
   var trackingEnabled = false;
   var processingFrame = false;
@@ -377,6 +486,7 @@ button:disabled { opacity: .55; }
     if (state.gameOver) resetGame();
     state.running = true;
     state.gameOver = false;
+    restartControls.style.display = "none";
     gameStatusEl.textContent = "Jugando";
   }
 
@@ -972,7 +1082,7 @@ button:disabled { opacity: .55; }
     }
 
     var currentCharacter = characterFrames[frame];
-    var characterHeight = 182;
+    var characterHeight = 155;
 
     if (
       currentCharacter &&
@@ -1162,6 +1272,7 @@ button:disabled { opacity: .55; }
       if (collision) {
         state.gameOver = true;
         state.running = false;
+        restartControls.style.display = "grid";
         gameStatusEl.textContent = "¡Choque!";
       }
     }
@@ -1182,10 +1293,10 @@ button:disabled { opacity: .55; }
 
       var rewardHitSize = 18 * rewardScaleAt(reward.y);
       var rewardCollision =
-        state.player.x - 28 < reward.x + rewardHitSize &&
-        state.player.x + 28 > reward.x - rewardHitSize &&
-        state.player.y - 58 < reward.y + rewardHitSize &&
-        state.player.y + 64 > reward.y - rewardHitSize;
+        state.player.x - 24 < reward.x + rewardHitSize &&
+        state.player.x + 24 > reward.x - rewardHitSize &&
+        state.player.y - 49 < reward.y + rewardHitSize &&
+        state.player.y + 54 > reward.y - rewardHitSize;
 
       if (rewardCollision) {
         state.rewardPopups.push({
@@ -1323,7 +1434,7 @@ button:disabled { opacity: .55; }
   }
 
   async function activateCamera() {
-    var button = document.getElementById("startGameButton");
+    var button = introCameraButton;
     button.disabled = true;
 
     try {
@@ -1354,6 +1465,13 @@ button:disabled { opacity: .55; }
       await startBackgroundVideo();
 
       cameraPanel.style.display = "none";
+
+      // La cámara ya está lista: quitamos definitivamente la intro.
+      introFinished = true;
+      introVideo.pause();
+      introVideo.style.display = "none";
+      introCameraButton.style.display = "none";
+
       cameraStatusEl.textContent = "Encendida";
       cameraStatusEl.textContent = "Cargando detector";
 
@@ -1391,14 +1509,18 @@ button:disabled { opacity: .55; }
     }
   }
 
-  document.getElementById("startGameButton").addEventListener("click", async function () {
-    await startBackgroundVideo();
+  introCameraButton.addEventListener("click", async function () {
+    if (introCameraButton.disabled || introFinished) return;
 
-    if (!cameraStream) {
-      await activateCamera();
-      return;
-    }
+    // IMPORTANTE:
+    // getUserMedia se ejecuta desde este toque real del usuario.
+    await activateCamera();
+  });
 
+  document.getElementById("startGameButton").addEventListener("click", function () {
+    if (!cameraStream) return;
+
+    restartControls.style.display = "none";
     resetGame();
     startGame();
   });
