@@ -236,24 +236,45 @@ button:disabled { opacity: .55; }
   gameMusic.volume = 0.45;
   gameMusic.loop = true;
 
-  // Intentar reproducir la música desde que carga la página.
+  var musicHasStarted = false;
+
   function tryAutoplayMusic() {
+    if (musicHasStarted && !gameMusic.paused) return;
+
+    gameMusic.loop = true;
+
     var promise = gameMusic.play();
-    if (promise && typeof promise.catch === "function") {
-      promise.catch(function () {
-        // Algunos navegadores móviles bloquean audio automático.
-        // En ese caso se iniciará con el primer toque del usuario.
+
+    if (promise && typeof promise.then === "function") {
+      promise.then(function () {
+        musicHasStarted = true;
+      }).catch(function () {
+        // Safari/Chrome móvil pueden bloquear audio con sonido
+        // hasta recibir el primer toque del usuario.
       });
     }
   }
 
-  window.addEventListener("load", tryAutoplayMusic);
+  // Intentamos iniciar la música lo antes posible:
+  // al parsear el HTML, al cargar el audio y al mostrar la página.
+  tryAutoplayMusic();
 
-  // Respaldo para móviles que bloquean autoplay con sonido.
-  document.addEventListener("pointerdown", function startMusicOnFirstTouch() {
+  document.addEventListener("DOMContentLoaded", tryAutoplayMusic);
+  window.addEventListener("load", tryAutoplayMusic);
+  window.addEventListener("pageshow", tryAutoplayMusic);
+  gameMusic.addEventListener("canplay", tryAutoplayMusic);
+
+  // Si el navegador bloqueó el autoplay, el primer toque lo desbloquea.
+  function unlockMusic() {
     tryAutoplayMusic();
-    document.removeEventListener("pointerdown", startMusicOnFirstTouch);
-  }, { once: true });
+    document.removeEventListener("pointerdown", unlockMusic);
+    document.removeEventListener("touchstart", unlockMusic);
+    document.removeEventListener("click", unlockMusic);
+  }
+
+  document.addEventListener("pointerdown", unlockMusic, { once: true });
+  document.addEventListener("touchstart", unlockMusic, { once: true });
+  document.addEventListener("click", unlockMusic, { once: true });
 
   var scoreEl = document.getElementById("score");
   var cameraStatusEl = document.getElementById("cameraStatus");
