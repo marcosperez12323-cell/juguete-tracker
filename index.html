@@ -322,8 +322,9 @@ button:disabled { opacity: .55; }
   }
 
   function obstacleScaleAt(y) {
-    // Pequeño en el horizonte; un poco más grande que el personaje al acercarse.
-    return 0.26 + roadDepth(y) * 0.90;
+    // Sigue pequeño en el horizonte, pero al final llega a ser
+    // aproximadamente el doble de grande que en la versión anterior.
+    return 0.26 + roadDepth(y) * 2.06;
   }
 
   function rewardScaleAt(y) {
