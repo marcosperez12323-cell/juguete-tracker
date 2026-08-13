@@ -169,7 +169,7 @@ button:disabled { opacity: .55; }
   </script>
 
   <!-- Decodificador de GIF para animarlo correctamente dentro del canvas -->
-  <script src="https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/dist/gifuct-js.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gifuct-js@1.0.0/dist/gifuct-js.min.js"></script>
 
 </head>
 
@@ -383,14 +383,20 @@ button:disabled { opacity: .55; }
 
   async function loadSnowmanGif() {
     try {
+      if (!window.gifuct ||
+          typeof window.gifuct.parseGIF !== "function" ||
+          typeof window.gifuct.decompressFrames !== "function") {
+        throw new Error("gifuct-js no se cargó correctamente.");
+      }
+
       var response = await fetch("images/muneco.gif");
       if (!response.ok) {
         throw new Error("HTTP " + response.status);
       }
 
       var buffer = await response.arrayBuffer();
-      var gif = gifuct.parseGIF(buffer);
-      var frames = gifuct.decompressFrames(gif, true);
+      var gif = window.gifuct.parseGIF(buffer);
+      var frames = window.gifuct.decompressFrames(gif, true);
 
       if (!frames || frames.length === 0) {
         throw new Error("El GIF no contiene fotogramas.");
@@ -437,7 +443,7 @@ button:disabled { opacity: .55; }
 
         snowmanFrames.push({
           canvas: fullFrame,
-          delay: Math.max(20, (frameData.delay || 10) * 10)
+          delay: Math.max(20, frameData.delay || 100)
         });
 
         // Manejar disposal method 2: restaurar fondo transparente.
