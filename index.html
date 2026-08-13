@@ -373,33 +373,38 @@ button:disabled { opacity: .55; }
     characterFrames.push(characterImage);
   }
 
-  // Animación simple del muñeco con 2 imágenes.
-  var snowmanFrames = [];
-  var snowmanReady = false;
+  // Animación del muñeco con 2 imágenes.
+  // Cada fotograma se valida por separado para evitar mostrar el muñeco blanco de emergencia.
+  var snowmanFrames = [new Image(), new Image()];
   var SNOWMAN_FRAME_MS = 180;
 
-  function loadSnowmanFrame(src) {
-    var img = new Image();
-    img.onload = function () {
-      if (snowmanFrames.filter(Boolean).length >= 2) {
-        snowmanReady = true;
-      }
-    };
-    img.onerror = function () {
-      console.warn("No se pudo cargar " + src);
-    };
-    img.src = src;
-    return img;
+  // "?v=2" obliga al navegador/GitHub Pages a pedir una copia nueva de las imágenes.
+  snowmanFrames[0].src = "images/muneco1.png?v=2";
+  snowmanFrames[1].src = "images/muneco2.png?v=2";
+
+  // Imagen de respaldo real por si alguna de las 2 imágenes tarda en cargar.
+  var snowmanFallbackImage = new Image();
+  snowmanFallbackImage.src = "images/muneco.png?v=2";
+
+  function imageIsReady(image) {
+    return !!(
+      image &&
+      image.complete &&
+      image.naturalWidth > 0 &&
+      image.naturalHeight > 0
+    );
   }
 
-  snowmanFrames[0] = loadSnowmanFrame("images/muneco1.png");
-  snowmanFrames[1] = loadSnowmanFrame("images/muneco2.png");
-
   function currentSnowmanFrame() {
-    if (!snowmanReady || snowmanFrames.length < 2) return null;
-
     var frameIndex = Math.floor(performance.now() / SNOWMAN_FRAME_MS) % 2;
-    return snowmanFrames[frameIndex];
+    var desiredFrame = snowmanFrames[frameIndex];
+    var alternateFrame = snowmanFrames[1 - frameIndex];
+
+    if (imageIsReady(desiredFrame)) return desiredFrame;
+    if (imageIsReady(alternateFrame)) return alternateFrame;
+    if (imageIsReady(snowmanFallbackImage)) return snowmanFallbackImage;
+
+    return null;
   }
 
   var starImage = new Image();
@@ -1180,31 +1185,18 @@ button:disabled { opacity: .55; }
     var y = obstacle.y;
     var scale = obstacleScaleAt(y);
 
-    if (snowmanReady) {
-      var animatedSnowmanFrame = currentSnowmanFrame();
+    var animatedSnowmanFrame = currentSnowmanFrame();
 
-      if (animatedSnowmanFrame && animatedSnowmanFrame.complete) {
-        drawImageCenteredByHeight(
-          animatedSnowmanFrame,
-          x,
-          y - 7 * scale,
-          105 * scale
-        );
-        return;
-      }
+    if (animatedSnowmanFrame) {
+      drawImageCenteredByHeight(
+        animatedSnowmanFrame,
+        x,
+        y - 7 * scale,
+        105 * scale
+      );
     }
 
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(scale, scale);
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(0, 18, 28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(0, -17, 20, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    // Si ninguna imagen está lista todavía, no dibujamos el muñeco blanco de emergencia.
   }
 
   function drawStar(reward) {
