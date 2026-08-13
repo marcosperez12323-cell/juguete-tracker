@@ -167,6 +167,10 @@ button:disabled { opacity: .55; }
     src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"
     crossorigin="anonymous">
   </script>
+
+  <!-- Decodificador de GIF para animarlo correctamente dentro del canvas -->
+  <script src="https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/dist/gifuct-js.min.js"></script>
+
 </head>
 
 <body>
@@ -371,13 +375,114 @@ button:disabled { opacity: .55; }
     characterFrames.push(characterImage);
   }
 
-  var snowmanImage = new Image();
+  // GIF animado del muñeco de nieve.
+  // gifuct-js separa el GIF en fotogramas para poder dibujarlos en canvas.
+  var snowmanFrames = [];
   var snowmanReady = false;
-  snowmanImage.onload = function () { snowmanReady = true; };
-  snowmanImage.onerror = function () {
-    console.warn("No se pudo cargar images/muneco.gif.");
-  };
-  snowmanImage.src = "images/muneco.gif";
+  var snowmanGifStart = performance.now();
+
+  async function loadSnowmanGif() {
+    try {
+      var response = await fetch("images/muneco.gif");
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status);
+      }
+
+      var buffer = await response.arrayBuffer();
+      var gif = gifuct.parseGIF(buffer);
+      var frames = gifuct.decompressFrames(gif, true);
+
+      if (!frames || frames.length === 0) {
+        throw new Error("El GIF no contiene fotogramas.");
+      }
+
+      var gifWidth = gif.lsd.width;
+      var gifHeight = gif.lsd.height;
+
+      var compositingCanvas = document.createElement("canvas");
+      compositingCanvas.width = gifWidth;
+      compositingCanvas.height = gifHeight;
+      var compositingCtx = compositingCanvas.getContext("2d");
+
+      snowmanFrames = [];
+
+      for (var fi = 0; fi < frames.length; fi++) {
+        var frameData = frames[fi];
+
+        var patchCanvas = document.createElement("canvas");
+        patchCanvas.width = frameData.dims.width;
+        patchCanvas.height = frameData.dims.height;
+        var patchCtx = patchCanvas.getContext("2d");
+
+        var imageData = patchCtx.createImageData(
+          frameData.dims.width,
+          frameData.dims.height
+        );
+        imageData.data.set(frameData.patch);
+        patchCtx.putImageData(imageData, 0, 0);
+
+        // Aplicar el parche del frame sobre el canvas completo.
+        compositingCtx.drawImage(
+          patchCanvas,
+          frameData.dims.left,
+          frameData.dims.top
+        );
+
+        // Guardar una copia completa del fotograma compuesto.
+        var fullFrame = document.createElement("canvas");
+        fullFrame.width = gifWidth;
+        fullFrame.height = gifHeight;
+        var fullCtx = fullFrame.getContext("2d");
+        fullCtx.drawImage(compositingCanvas, 0, 0);
+
+        snowmanFrames.push({
+          canvas: fullFrame,
+          delay: Math.max(20, (frameData.delay || 10) * 10)
+        });
+
+        // Manejar disposal method 2: restaurar fondo transparente.
+        if (frameData.disposalType === 2) {
+          compositingCtx.clearRect(
+            frameData.dims.left,
+            frameData.dims.top,
+            frameData.dims.width,
+            frameData.dims.height
+          );
+        }
+      }
+
+      snowmanGifStart = performance.now();
+      snowmanReady = true;
+    } catch (error) {
+      console.warn("No se pudo cargar o animar images/muneco.gif.", error);
+      snowmanReady = false;
+    }
+  }
+
+  function currentSnowmanFrame() {
+    if (!snowmanReady || snowmanFrames.length === 0) return null;
+
+    var totalDuration = 0;
+    for (var i = 0; i < snowmanFrames.length; i++) {
+      totalDuration += snowmanFrames[i].delay;
+    }
+
+    if (totalDuration <= 0) return snowmanFrames[0].canvas;
+
+    var elapsed = (performance.now() - snowmanGifStart) % totalDuration;
+    var accumulated = 0;
+
+    for (var j = 0; j < snowmanFrames.length; j++) {
+      accumulated += snowmanFrames[j].delay;
+      if (elapsed < accumulated) {
+        return snowmanFrames[j].canvas;
+      }
+    }
+
+    return snowmanFrames[snowmanFrames.length - 1].canvas;
+  }
+
+  loadSnowmanGif();
 
   var starImage = new Image();
   var starReady = false;
@@ -479,9 +584,9 @@ button:disabled { opacity: .55; }
   }
 
   function obstacleScaleAt(y) {
-    // Sigue pequeño en el horizonte, pero al final llega a ser
-    // aproximadamente el doble de grande que en la versión anterior.
-    return 0.26 + roadDepth(y) * 2.06;
+    // Mantiene el muñeco pequeño en el horizonte,
+    // pero llega un poco más pequeño al final de la carretera.
+    return 0.26 + roadDepth(y) * 1.75;
   }
 
   function rewardScaleAt(y) {
@@ -1158,13 +1263,17 @@ button:disabled { opacity: .55; }
     var scale = obstacleScaleAt(y);
 
     if (snowmanReady) {
-      drawImageCenteredByHeight(
-        snowmanImage,
-        x,
-        y - 7 * scale,
-        105 * scale
-      );
-      return;
+      var animatedSnowmanFrame = currentSnowmanFrame();
+
+      if (animatedSnowmanFrame) {
+        drawImageCenteredByHeight(
+          animatedSnowmanFrame,
+          x,
+          y - 7 * scale,
+          105 * scale
+        );
+        return;
+      }
     }
 
     ctx.save();
