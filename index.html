@@ -375,9 +375,9 @@ button:disabled { opacity: .55; }
   var snowmanReady = false;
   snowmanImage.onload = function () { snowmanReady = true; };
   snowmanImage.onerror = function () {
-    console.warn("No se pudo cargar images/muneco.png.");
+    console.warn("No se pudo cargar images/muneco.gif.");
   };
-  snowmanImage.src = "images/muneco.png";
+  snowmanImage.src = "images/muneco.gif";
 
   var starImage = new Image();
   var starReady = false;
@@ -421,8 +421,8 @@ button:disabled { opacity: .55; }
   var ROAD_TOP_HALF = W * 0.055;
   var ROAD_BOTTOM_HALF = W * 0.60;
 
-  // Cinco posiciones de paso para el formato vertical. Se abren con la perspectiva de la carretera.
-  var laneValues = [-0.90, -0.45, 0, 0.45, 0.90];
+  // Siete posiciones de paso para el formato vertical. Se abren con la perspectiva de la carretera.
+  var laneValues = [-0.90, -0.60, -0.30, 0, 0.30, 0.60, 0.90];
 
   var state = {
     running: false,
@@ -1272,7 +1272,7 @@ button:disabled { opacity: .55; }
     }
 
     // Cuando toca una estrella intentamos colocarla en uno de los carriles libres.
-    // Si los cinco están ocupados, esperamos a que se libere uno, pero dejamos
+    // Si los siete están ocupados, esperamos a que se libere uno, pero dejamos
     // los muñecos que ya están en pantalla para que la estrella aparezca entre ellos.
     if (state.rewardPending && state.rewards.length === 0) {
       if (spawnReward()) {
@@ -1311,11 +1311,12 @@ button:disabled { opacity: .55; }
       }
 
       var obstacleScale = obstacleScaleAt(obstacle.y);
+      // Colisión del muñeco reducida un 20%.
       var collision =
-        state.player.x - 22 < obstacle.x + 30 * obstacleScale &&
-        state.player.x + 22 > obstacle.x - 30 * obstacleScale &&
-        state.player.y - 50 < obstacle.y + 48 * obstacleScale &&
-        state.player.y + 55 > obstacle.y - 62 * obstacleScale;
+        state.player.x - 22 < obstacle.x + 24 * obstacleScale &&
+        state.player.x + 22 > obstacle.x - 24 * obstacleScale &&
+        state.player.y - 50 < obstacle.y + 38.4 * obstacleScale &&
+        state.player.y + 55 > obstacle.y - 49.6 * obstacleScale;
 
       if (collision) {
         state.gameOver = true;
