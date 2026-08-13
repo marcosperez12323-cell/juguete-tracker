@@ -507,9 +507,9 @@ button:disabled { opacity: .55; }
   }
 
   function obstacleScaleAt(y) {
-    // Mantiene el muñeco pequeño en el horizonte,
-    // pero llega un poco más pequeño al final de la carretera.
-    return 0.26 + roadDepth(y) * 1.75;
+    // Mantiene prácticamente el mismo tamaño al aparecer en el horizonte,
+    // pero termina más pequeño para separar mejor los carriles vecinos.
+    return 0.26 + roadDepth(y) * 1.30;
   }
 
   function rewardScaleAt(y) {
